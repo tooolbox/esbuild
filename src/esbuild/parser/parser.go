@@ -163,6 +163,7 @@ type parser struct {
 	allowIn                  bool
 	currentFnOpts            fnOpts
 	target                   LanguageTarget
+	ts                       TypeScriptOptions
 	jsx                      JSXOptions
 	latestReturnHadSemicolon bool
 	allocatedNames           []string
@@ -207,6 +208,11 @@ func (p *parser) storeNameInRef(name string) ast.Ref {
 		p.allocatedNames = append(p.allocatedNames, name)
 		return ref
 	}
+}
+
+func (p *parser) skipTypeScriptType() {
+	p.addRangeError(p.lexer.Range(), "TODO: Parse TypeScript types")
+	panic(lexer.LexerPanic{})
 }
 
 // Due to ES6 destructuring patterns, there are many cases where it's
@@ -1854,6 +1860,11 @@ func (p *parser) parseDecls() []ast.Decl {
 		var value *ast.Expr
 		local := p.parseBinding()
 
+		if p.ts.Parse && p.lexer.Token == lexer.TColon {
+			p.lexer.Next()
+			p.skipTypeScriptType()
+		}
+
 		if p.lexer.Token == lexer.TEquals {
 			p.lexer.Next()
 			expr := p.parseExpr(ast.LComma)
@@ -2093,6 +2104,11 @@ func (p *parser) parseFn(name *ast.LocRef, opts fnOpts) ast.Fn {
 
 		arg := p.parseBinding()
 
+		if p.ts.Parse && p.lexer.Token == lexer.TColon {
+			p.lexer.Next()
+			p.skipTypeScriptType()
+		}
+
 		var defaultValue *ast.Expr
 		if !hasRestArg && p.lexer.Token == lexer.TEquals {
 			p.lexer.Next()
@@ -2224,12 +2240,23 @@ func (p *parser) parseStmt(opts parseStmtOpts) ast.Stmt {
 
 		case lexer.TIdentifier:
 			if p.lexer.IsContextualKeyword("async") {
+				// "export async function foo() {}"
 				p.warnAboutFutureSyntax(ES2017, p.lexer.Range())
 				p.lexer.Next()
 				p.lexer.Expect(lexer.TFunction)
 				opts.isExport = true
 				return p.parseFnStmt(loc, opts, true /* isAsync */)
 			}
+
+			if p.ts.Parse && p.lexer.IsContextualKeyword("type") {
+				// "export type foo = ..."
+				p.lexer.Next()
+				p.lexer.Expect(lexer.TIdentifier)
+				p.lexer.Expect(lexer.TEquals)
+				p.skipTypeScriptType()
+				p.lexer.ExpectOrInsertSemicolon()
+			}
+
 			p.lexer.Unexpected()
 			return ast.Stmt{}
 
@@ -2622,6 +2649,19 @@ func (p *parser) parseStmt(opts parseStmtOpts) ast.Stmt {
 
 			stmt.DefaultName = &ast.LocRef{p.lexer.Loc(), p.storeNameInRef(p.lexer.Identifier)}
 			p.lexer.Next()
+
+			if p.ts.Parse && p.lexer.Token == lexer.TEquals {
+				// "import ns = require('x')"
+				p.lexer.Next()
+				value := p.parseExpr(ast.LComma)
+				p.lexer.ExpectOrInsertSemicolon()
+				decls := []ast.Decl{ast.Decl{
+					ast.Binding{stmt.DefaultName.Loc, &ast.BIdentifier{stmt.DefaultName.Ref}},
+					&value,
+				}}
+				return ast.Stmt{loc, &ast.SConst{decls, false}}
+			}
+
 			if p.lexer.Token == lexer.TComma {
 				p.lexer.Next()
 				switch p.lexer.Token {
@@ -2643,6 +2683,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) ast.Stmt {
 					p.lexer.Unexpected()
 				}
 			}
+
 			p.lexer.ExpectContextualKeyword("from")
 
 		default:
@@ -4918,6 +4959,7 @@ func Parse(log logging.Log, source logging.Source, options ParseOptions) (result
 		lexer:        lexer.NewLexer(log, source),
 		allowIn:      true,
 		target:       options.Target,
+		ts:           options.TS,
 		jsx:          options.JSX,
 		omitWarnings: options.OmitWarnings,
 	}
