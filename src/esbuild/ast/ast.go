@@ -505,6 +505,9 @@ type SConst struct {
 
 type SEmpty struct{}
 
+// This is a stand-in for a TypeScript type declaration
+type STypeScript struct{}
+
 type SDebugger struct{}
 
 type SDirective struct {
@@ -668,6 +671,7 @@ func (*SConst) isStmt()         {}
 func (*SDebugger) isStmt()      {}
 func (*SDirective) isStmt()     {}
 func (*SEmpty) isStmt()         {}
+func (*STypeScript) isStmt()    {}
 func (*SExportClause) isStmt()  {}
 func (*SExportFrom) isStmt()    {}
 func (*SExportDefault) isStmt() {}
