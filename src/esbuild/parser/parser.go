@@ -3752,6 +3752,7 @@ type binder struct {
 	target            LanguageTarget
 
 	isBundling              bool
+	enclosingNamespaceRef   ast.Ref
 	indirectImportItems     map[ast.Ref]bool
 	importItemsForNamespace map[ast.Ref]map[string]ast.Ref
 	exprForImportItem       map[ast.Ref]*ast.ENamespaceImport
@@ -3920,12 +3921,15 @@ func (b *binder) declareSymbol(kind ast.SymbolKind, loc ast.Loc, name string) as
 }
 
 func (b *binder) recordExport(loc ast.Loc, alias string) {
-	if b.exportAliases[alias] {
-		// Warn about duplicate exports
-		b.log.AddRangeError(b.source, lexer.RangeOfIdentifier(b.source, loc),
-			fmt.Sprintf("Multiple exports with the same name %q", alias))
-	} else {
-		b.exportAliases[alias] = true
+	// This is only an ES6 export if we're not inside a TypeScript namespace
+	if b.enclosingNamespaceRef == ast.InvalidRef {
+		if b.exportAliases[alias] {
+			// Warn about duplicate exports
+			b.log.AddRangeError(b.source, lexer.RangeOfIdentifier(b.source, loc),
+				fmt.Sprintf("Multiple exports with the same name %q", alias))
+		} else {
+			b.exportAliases[alias] = true
+		}
 	}
 }
 
@@ -5142,9 +5146,14 @@ func (b *binder) visitAndAppendStmt(stmts []ast.Stmt, stmt ast.Stmt) []ast.Stmt 
 		}}}}
 
 	case *ast.SNamespace:
+		oldEnclosingNamespaceRef := b.enclosingNamespaceRef
+		b.enclosingNamespaceRef = s.Name.Ref
+
 		b.pushScope(ast.ScopeEntry)
 		stmts := b.declareAndVisitEntryStmts(s.Stmts)
 		b.popScope()
+
+		b.enclosingNamespaceRef = oldEnclosingNamespaceRef
 
 		fnExpr := ast.Expr{stmt.Loc, &ast.EFunction{Fn: ast.Fn{
 			Args:  []ast.Arg{ast.Arg{Binding: ast.Binding{s.Name.Loc, &ast.BIdentifier{s.Name.Ref}}}},
@@ -5991,6 +6000,7 @@ func newBinder(source logging.Source, options ParseOptions) *binder {
 		identifierDefines: make(map[string]ast.E),
 		dotDefines:        make(map[string]dotDefine),
 
+		enclosingNamespaceRef:   ast.InvalidRef,
 		indirectImportItems:     make(map[ast.Ref]bool),
 		importItemsForNamespace: make(map[ast.Ref]map[string]ast.Ref),
 		exprForImportItem:       make(map[ast.Ref]*ast.ENamespaceImport),
