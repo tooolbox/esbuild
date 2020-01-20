@@ -1465,10 +1465,11 @@ func (p *parser) parsePrefix(level ast.L, errors *deferredErrors) ast.Expr {
 			temp := ast.LocRef{p.lexer.Loc(), p.storeNameInRef(p.lexer.Identifier)}
 			name = &temp
 			p.lexer.Next()
+		}
 
-			if p.ts.Parse {
-				p.skipTypeScriptTypeParameters()
-			}
+		// Even anonymous classes can have TypeScript type parameters
+		if p.ts.Parse {
+			p.skipTypeScriptTypeParameters()
 		}
 
 		class := p.parseClass(name)
@@ -2749,16 +2750,19 @@ func (p *parser) parseClassStmt(loc ast.Loc, opts parseStmtOpts) ast.Stmt {
 	if !opts.isNameOptional || p.lexer.Token == lexer.TIdentifier {
 		name = &ast.LocRef{p.lexer.Loc(), p.storeNameInRef(p.lexer.Identifier)}
 		p.lexer.Expect(lexer.TIdentifier)
+	}
 
-		if p.ts.Parse {
-			p.skipTypeScriptTypeParameters()
-		}
+	// Even anonymous classes can have TypeScript type parameters
+	if p.ts.Parse {
+		p.skipTypeScriptTypeParameters()
 	}
 
 	class := p.parseClass(name)
 	return ast.Stmt{loc, &ast.SClass{class, opts.isExport}}
 }
 
+// By the time we call this, the identifier and type parameters have already
+// been parsed. We need to start parsing from the "extends" clause.
 func (p *parser) parseClass(name *ast.LocRef) ast.Class {
 	var extends *ast.Expr
 
