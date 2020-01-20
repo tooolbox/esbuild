@@ -972,33 +972,55 @@ func (p *parser) parseParenExpr(loc ast.Loc, isAsync bool) ast.Expr {
 	// The parenthetical construct must end with a close parenthesis
 	p.lexer.Expect(lexer.TCloseParen)
 
-	// Skip over types
-	if p.ts.Parse && p.lexer.Token == lexer.TColon {
-		typeColonRange = p.lexer.Range()
-		p.lexer.Next()
-		p.skipTypeScriptReturnType()
-	}
-
 	// Are these arguments to an arrow function?
-	if p.lexer.Token == lexer.TEqualsGreaterThan {
-		p.logBindingErrors(&errors)
-		p.lexer.Next()
+	if p.lexer.Token == lexer.TEqualsGreaterThan || (p.ts.Parse && p.lexer.Token == lexer.TColon) {
+		invalidLog := []ast.Loc{}
 		args := []ast.Arg{}
+
+		// First, try converting the expressions to bindings
 		for _, item := range items {
 			if spread, ok := item.Data.(*ast.ESpread); ok {
 				item = spread.Value
 			}
-			binding, initializer := p.convertExprToBindingAndInitializer(item)
+			binding, initializer, log := p.convertExprToBindingAndInitializer(item, invalidLog)
+			invalidLog = log
 			args = append(args, ast.Arg{binding, initializer})
 		}
-		stmts, expr := p.parseArrowBody(fnOpts{allowAwait: isAsync})
-		return ast.Expr{loc, &ast.EArrow{
-			IsAsync:    isAsync,
-			Args:       args,
-			HasRestArg: spreadRange.Len > 0,
-			Stmts:      stmts,
-			Expr:       expr,
-		}}
+
+		// Avoid parsing TypeScript code like "a ? (1 + 2) : (3 + 4)" as an arrow
+		// function. The ":" after the ")" may be a return type annotation, so we
+		// attempt to convert the expressions to bindings first before deciding
+		// whether this is an arrow function, and only pick an arrow function if
+		// there were no conversion errors.
+		if p.lexer.Token == lexer.TEqualsGreaterThan || len(invalidLog) == 0 {
+			p.logBindingErrors(&errors)
+
+			// Now that we've decided we're an arrow function, report binding pattern
+			// conversion errors
+			if len(invalidLog) > 0 {
+				for _, loc := range invalidLog {
+					p.addError(loc, "Invalid binding pattern")
+				}
+				panic(lexer.LexerPanic{})
+			}
+
+			// Skip over the return type
+			if p.lexer.Token == lexer.TColon {
+				p.lexer.Next()
+				p.skipTypeScriptReturnType()
+			}
+
+			p.lexer.Expect(lexer.TEqualsGreaterThan)
+			stmts, expr := p.parseArrowBody(fnOpts{allowAwait: isAsync})
+
+			return ast.Expr{loc, &ast.EArrow{
+				IsAsync:    isAsync,
+				Args:       args,
+				HasRestArg: spreadRange.Len > 0,
+				Stmts:      stmts,
+				Expr:       expr,
+			}}
+		}
 	}
 
 	// If this isn't an arrow function, then types aren't allowed
@@ -1033,22 +1055,23 @@ func (p *parser) parseParenExpr(loc ast.Loc, isAsync bool) ast.Expr {
 	return ast.Expr{}
 }
 
-func (p *parser) convertExprToBindingAndInitializer(expr ast.Expr) (binding ast.Binding, initializer *ast.Expr) {
+func (p *parser) convertExprToBindingAndInitializer(expr ast.Expr, invalidLog []ast.Loc) (ast.Binding, *ast.Expr, []ast.Loc) {
+	var initializer *ast.Expr
 	if assign, ok := expr.Data.(*ast.EBinary); ok && assign.Op == ast.BinOpAssign {
 		initializer = &assign.Right
 		expr = assign.Left
 	}
-	binding = p.convertExprToBinding(expr)
-	return
+	binding, invalidLog := p.convertExprToBinding(expr, invalidLog)
+	return binding, initializer, invalidLog
 }
 
-func (p *parser) convertExprToBinding(expr ast.Expr) ast.Binding {
+func (p *parser) convertExprToBinding(expr ast.Expr, invalidLog []ast.Loc) (ast.Binding, []ast.Loc) {
 	switch e := expr.Data.(type) {
 	case *ast.EMissing:
-		return ast.Binding{expr.Loc, &ast.BMissing{}}
+		return ast.Binding{expr.Loc, &ast.BMissing{}}, invalidLog
 
 	case *ast.EIdentifier:
-		return ast.Binding{expr.Loc, &ast.BIdentifier{e.Ref}}
+		return ast.Binding{expr.Loc, &ast.BIdentifier{e.Ref}}, invalidLog
 
 	case *ast.EArray:
 		items := []ast.ArrayBinding{}
@@ -1058,23 +1081,24 @@ func (p *parser) convertExprToBinding(expr ast.Expr) ast.Binding {
 				isSpread = true
 				item = i.Value
 			}
-			binding, initializer := p.convertExprToBindingAndInitializer(item)
+			binding, initializer, log := p.convertExprToBindingAndInitializer(item, invalidLog)
+			invalidLog = log
 			items = append(items, ast.ArrayBinding{binding, initializer})
 		}
 		return ast.Binding{expr.Loc, &ast.BArray{
 			Items:     items,
 			HasSpread: isSpread,
-		}}
+		}}, invalidLog
 
 	case *ast.EObject:
 		items := []ast.PropertyBinding{}
 		for _, item := range e.Properties {
-			if item.Kind == ast.PropertyGet || item.IsMethod ||
-				item.Kind == ast.PropertySet {
-				p.addError(item.Key.Loc, "Invalid binding pattern")
-				panic(lexer.LexerPanic{})
+			if item.IsMethod || item.Kind == ast.PropertyGet || item.Kind == ast.PropertySet {
+				invalidLog = append(invalidLog, item.Key.Loc)
+				continue
 			}
-			binding, initializer := p.convertExprToBindingAndInitializer(*item.Value)
+			binding, initializer, log := p.convertExprToBindingAndInitializer(*item.Value, invalidLog)
+			invalidLog = log
 			if initializer == nil {
 				initializer = item.Initializer
 			}
@@ -1086,11 +1110,11 @@ func (p *parser) convertExprToBinding(expr ast.Expr) ast.Binding {
 				DefaultValue: initializer,
 			})
 		}
-		return ast.Binding{expr.Loc, &ast.BObject{items}}
+		return ast.Binding{expr.Loc, &ast.BObject{items}}, invalidLog
 
 	default:
-		p.addError(expr.Loc, "Invalid binding pattern")
-		panic(lexer.LexerPanic{})
+		invalidLog = append(invalidLog, expr.Loc)
+		return ast.Binding{}, invalidLog
 	}
 }
 
