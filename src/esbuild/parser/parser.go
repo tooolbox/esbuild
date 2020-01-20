@@ -2931,17 +2931,18 @@ func (p *parser) parseStmt(opts parseStmtOpts) ast.Stmt {
 				return p.parseFnStmt(loc, opts, true /* isAsync */)
 			}
 
-			if p.ts.Parse {
-				if p.lexer.IsContextualKeyword("type") {
+			if p.ts.Parse && p.lexer.Token == lexer.TIdentifier {
+				switch p.lexer.Identifier {
+				case "type":
 					// "export type foo = ..."
 					p.lexer.Next()
 					p.skipTypeScriptTypeStmt()
 					return ast.Stmt{loc, &ast.STypeScript{}}
-				}
 
-				if p.lexer.IsContextualKeyword("abstract") || p.lexer.IsContextualKeyword("namespace") {
-					// "export abstract class Foo {}"
+				case "namespace", "abstract", "declare":
 					// "export namespace Foo {}"
+					// "export abstract class Foo {}"
+					// "export declare class Foo {}"
 					opts.isExport = true
 					return p.parseStmt(opts)
 				}
@@ -3508,29 +3509,25 @@ func (p *parser) parseStmt(opts parseStmtOpts) ast.Stmt {
 
 		if isIdentifier {
 			if ident, ok := expr.Data.(*ast.EIdentifier); ok {
-				switch p.lexer.Token {
-				case lexer.TColon:
+				if p.lexer.Token == lexer.TColon {
 					// Parse a labeled statement
 					p.lexer.Next()
 					name := ast.LocRef{expr.Loc, ident.Ref}
 					stmt := p.parseStmt(parseStmtOpts{})
 					return ast.Stmt{loc, &ast.SLabel{name, stmt}}
+				}
 
-				case lexer.TClass:
-					if p.ts.Parse && name == "abstract" {
-						p.lexer.Next()
-						return p.parseClassStmt(loc, opts)
-					}
-
-				case lexer.TIdentifier:
-					if p.ts.Parse {
-						if name == "type" {
+				if p.ts.Parse {
+					switch name {
+					case "type":
+						if p.lexer.Token == lexer.TIdentifier {
 							// "type Foo = any"
 							p.skipTypeScriptTypeStmt()
 							return ast.Stmt{loc, &ast.STypeScript{}}
 						}
 
-						if (opts.isModuleScope || opts.isNamespaceScope) && name == "namespace" {
+					case "namespace":
+						if (opts.isModuleScope || opts.isNamespaceScope) && p.lexer.Token == lexer.TIdentifier {
 							// "namespace Foo {}"
 							name := ast.LocRef{p.lexer.Loc(), p.storeNameInRef(p.lexer.Identifier)}
 							p.lexer.Next()
@@ -3539,10 +3536,14 @@ func (p *parser) parseStmt(opts parseStmtOpts) ast.Stmt {
 							p.lexer.Next()
 							return ast.Stmt{loc, &ast.SNamespace{name, stmts, opts.isExport}}
 						}
-					}
 
-				default:
-					if p.ts.Parse && name == "declare" {
+					case "abstract":
+						if p.lexer.Token == lexer.TClass {
+							p.lexer.Next()
+							return p.parseClassStmt(loc, opts)
+						}
+
+					case "declare":
 						// "declare const x: any"
 						p.parseStmt(parseStmtOpts{isTypeScriptDeclare: true})
 						return ast.Stmt{loc, &ast.STypeScript{}}
