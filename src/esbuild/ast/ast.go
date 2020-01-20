@@ -538,6 +538,12 @@ type SExpr struct {
 	Value Expr
 }
 
+type SNamespace struct {
+	Name     LocRef
+	Stmts    []Stmt
+	IsExport bool
+}
+
 type SFunction struct {
 	Fn       Fn
 	IsExport bool
@@ -677,6 +683,7 @@ func (*SExportFrom) isStmt()    {}
 func (*SExportDefault) isStmt() {}
 func (*SExportStar) isStmt()    {}
 func (*SExpr) isStmt()          {}
+func (*SNamespace) isStmt()     {}
 func (*SFunction) isStmt()      {}
 func (*SClass) isStmt()         {}
 func (*SLabel) isStmt()         {}
@@ -792,10 +799,9 @@ type ScopeKind int
 const (
 	ScopeBlock ScopeKind = iota
 	ScopeLabel
-	ScopeFunction
+	ScopeEntry // This is a module, function, or namespace
 	ScopeFunctionName
 	ScopeClassName
-	ScopeModule
 )
 
 type Scope struct {
