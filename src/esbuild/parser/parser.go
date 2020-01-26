@@ -3000,11 +3000,17 @@ func (p *parser) parseStmt(opts parseStmtOpts) ast.Stmt {
 					p.skipTypeScriptTypeStmt()
 					return ast.Stmt{loc, &ast.STypeScript{}}
 
-				case "namespace", "abstract", "declare":
+				case "namespace", "abstract":
 					// "export namespace Foo {}"
 					// "export abstract class Foo {}"
+					opts.isExport = true
+					return p.parseStmt(opts)
+
+				case "declare":
 					// "export declare class Foo {}"
 					opts.isExport = true
+					opts.allowLexicalDecl = true
+					opts.isTypeScriptDeclare = true
 					return p.parseStmt(opts)
 				}
 			}
@@ -3606,7 +3612,9 @@ func (p *parser) parseStmt(opts parseStmtOpts) ast.Stmt {
 
 					case "declare":
 						// "declare const x: any"
-						p.parseStmt(parseStmtOpts{isTypeScriptDeclare: true})
+						opts.allowLexicalDecl = true
+						opts.isTypeScriptDeclare = true
+						p.parseStmt(opts)
 						return ast.Stmt{loc, &ast.STypeScript{}}
 					}
 				}
