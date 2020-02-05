@@ -125,5 +125,5 @@ func ModuleExportsAST(source logging.Source, expr ast.Expr) ast.AST {
 	// Mark that we used the "module" variable
 	b.symbols[b.moduleRef.InnerIndex].UseCountEstimate++
 
-	return b.toAST(source, []ast.Stmt{stmt}, []ast.ImportPath{})
+	return b.toAST(source, []ast.Stmt{stmt})
 }
