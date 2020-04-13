@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"esbuild/ast"
@@ -329,7 +329,7 @@ Examples:
 	return args
 }
 
-func main() {
+func Run() {
 	start := time.Now()
 	args := parseArgs()
 
