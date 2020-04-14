@@ -1,13 +1,14 @@
 package resolver
 
 import (
-	"esbuild/ast"
-	"esbuild/fs"
-	"esbuild/lexer"
-	"esbuild/logging"
-	"esbuild/parser"
 	"strings"
 	"sync"
+
+	"github.com/tooolbox/esbuild/src/esbuild/ast"
+	"github.com/tooolbox/esbuild/src/esbuild/fs"
+	"github.com/tooolbox/esbuild/src/esbuild/lexer"
+	"github.com/tooolbox/esbuild/src/esbuild/logging"
+	"github.com/tooolbox/esbuild/src/esbuild/parser"
 )
 
 type ResolveStatus uint8

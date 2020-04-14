@@ -6,13 +6,14 @@ package logging
 // default.
 
 import (
-	"esbuild/ast"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/tooolbox/esbuild/src/esbuild/ast"
 )
 
 type Log struct {

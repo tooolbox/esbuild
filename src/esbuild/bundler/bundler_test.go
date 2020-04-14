@@ -1,12 +1,13 @@
 package bundler
 
 import (
-	"esbuild/fs"
-	"esbuild/logging"
-	"esbuild/parser"
-	"esbuild/resolver"
 	"path"
 	"testing"
+
+	"github.com/tooolbox/esbuild/src/esbuild/fs"
+	"github.com/tooolbox/esbuild/src/esbuild/logging"
+	"github.com/tooolbox/esbuild/src/esbuild/parser"
+	"github.com/tooolbox/esbuild/src/esbuild/resolver"
 )
 
 func assertEqual(t *testing.T, a interface{}, b interface{}) {
