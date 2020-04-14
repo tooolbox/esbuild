@@ -1,14 +1,15 @@
 package parser
 
 import (
-	"esbuild/ast"
-	"esbuild/lexer"
-	"esbuild/logging"
 	"fmt"
 	"math"
 	"reflect"
 	"strings"
 	"unsafe"
+
+	"github.com/tooolbox/esbuild/src/esbuild/ast"
+	"github.com/tooolbox/esbuild/src/esbuild/lexer"
+	"github.com/tooolbox/esbuild/src/esbuild/logging"
 )
 
 // This parser does two passes:

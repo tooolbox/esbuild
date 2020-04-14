@@ -1,9 +1,10 @@
 package printer
 
 import (
-	"esbuild/logging"
-	"esbuild/parser"
 	"testing"
+
+	"github.com/tooolbox/esbuild/src/esbuild/logging"
+	"github.com/tooolbox/esbuild/src/esbuild/parser"
 )
 
 func assertEqual(t *testing.T, a interface{}, b interface{}) {

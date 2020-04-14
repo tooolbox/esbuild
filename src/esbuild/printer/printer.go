@@ -2,12 +2,13 @@ package printer
 
 import (
 	"bytes"
-	"esbuild/ast"
-	"esbuild/lexer"
 	"fmt"
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/tooolbox/esbuild/src/esbuild/ast"
+	"github.com/tooolbox/esbuild/src/esbuild/lexer"
 )
 
 var base64 = []byte("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")

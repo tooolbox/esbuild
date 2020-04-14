@@ -1,10 +1,11 @@
 package bundler
 
 import (
-	"esbuild/ast"
-	"esbuild/lexer"
 	"sort"
 	"strconv"
+
+	"github.com/tooolbox/esbuild/src/esbuild/ast"
+	"github.com/tooolbox/esbuild/src/esbuild/lexer"
 )
 
 func reservedNames(moduleScopes []*ast.Scope, symbols *ast.SymbolMap) map[string]bool {

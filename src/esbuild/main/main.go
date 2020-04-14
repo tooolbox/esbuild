@@ -1,13 +1,6 @@
-package main
+package cmd
 
 import (
-	"esbuild/ast"
-	"esbuild/bundler"
-	"esbuild/fs"
-	"esbuild/lexer"
-	"esbuild/logging"
-	"esbuild/parser"
-	"esbuild/resolver"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -17,6 +10,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tooolbox/esbuild/src/esbuild/ast"
+	"github.com/tooolbox/esbuild/src/esbuild/bundler"
+	"github.com/tooolbox/esbuild/src/esbuild/fs"
+	"github.com/tooolbox/esbuild/src/esbuild/lexer"
+	"github.com/tooolbox/esbuild/src/esbuild/logging"
+	"github.com/tooolbox/esbuild/src/esbuild/parser"
+	"github.com/tooolbox/esbuild/src/esbuild/resolver"
 )
 
 type args struct {
@@ -353,7 +354,7 @@ Examples:
 	return args
 }
 
-func main() {
+func Run() {
 	start := time.Now()
 	args := parseArgs()
 

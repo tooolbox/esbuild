@@ -1,11 +1,12 @@
 package parser
 
 import (
-	"esbuild/ast"
-	"esbuild/logging"
-	"esbuild/printer"
 	"fmt"
 	"testing"
+
+	"github.com/tooolbox/esbuild/src/esbuild/ast"
+	"github.com/tooolbox/esbuild/src/esbuild/logging"
+	"github.com/tooolbox/esbuild/src/esbuild/printer"
 )
 
 func assertEqual(t *testing.T, a interface{}, b interface{}) {

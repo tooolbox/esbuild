@@ -3,17 +3,18 @@ package bundler
 import (
 	"bytes"
 	"encoding/base64"
-	"esbuild/ast"
-	"esbuild/fs"
-	"esbuild/lexer"
-	"esbuild/logging"
-	"esbuild/parser"
-	"esbuild/printer"
-	"esbuild/resolver"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/tooolbox/esbuild/src/esbuild/ast"
+	"github.com/tooolbox/esbuild/src/esbuild/fs"
+	"github.com/tooolbox/esbuild/src/esbuild/lexer"
+	"github.com/tooolbox/esbuild/src/esbuild/logging"
+	"github.com/tooolbox/esbuild/src/esbuild/parser"
+	"github.com/tooolbox/esbuild/src/esbuild/printer"
+	"github.com/tooolbox/esbuild/src/esbuild/resolver"
 )
 
 type file struct {
