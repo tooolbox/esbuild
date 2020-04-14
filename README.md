@@ -1,6 +1,7 @@
 # esbuild
 
-![Go](https://github.com/tooolbox/esbuild/workflows/Go/badge.svg) ![Godoc](https://godoc.org/github.com/tooolbox/esbuild?status.svg)
+![Go](https://github.com/tooolbox/esbuild/workflows/Go/badge.svg)
+![Godoc](https://godoc.org/github.com/tooolbox/esbuild?status.svg)
 
 This is a JavaScript bundler and minifier. It packages up JavaScript and TypeScript code for distribution on the web.
 
