@@ -5,6 +5,14 @@
 
 This is a JavaScript bundler and minifier. It packages up JavaScript and TypeScript code for distribution on the web.
 
+## Fork
+
+This fork incorporates the absolute minimum adjustments to add Go Modules compatibility.  In addition to the installation instructions below via NPM, it can be installed with the Go tool:
+
+```
+go get github.com/tooolbox/esbuild
+```
+
 ## Why?
 
 Why build another JavaScript build tool? The current build tools for the web are at least an order of magnitude slower than they should be. I'm hoping that this project serves as an "existence proof" that our JavaScript tooling can be much, much faster.
