@@ -1,3 +1,3 @@
 package cmd
 
-const esbuildVersion = "0.1.3"
+const esbuildVersion = "0.1.4"

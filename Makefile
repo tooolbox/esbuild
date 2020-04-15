@@ -5,6 +5,7 @@ esbuild: src/esbuild/*/*.go
 
 test:
 	go test ./...
+	node scripts/verify-source-map.js
 
 update-version-go:
 	echo "package cmd\n\nconst esbuildVersion = \"$(ESBUILD_VERSION)\"" > src/esbuild/main/version.go
@@ -59,6 +60,9 @@ clean:
 	rm -rf npm/esbuild-darwin-64/bin
 	rm -rf npm/esbuild-linux-64/bin
 
+node_modules:
+	npm ci
+
 ################################################################################
 
 github/test262:
@@ -69,37 +73,8 @@ demo/test262: | github/test262
 	mkdir -p demo/test262
 	cp -r github/test262/test demo/test262/test
 
-################################################################################
-
 test262: esbuild | demo/test262
 	node scripts/test262.js
-
-################################################################################
-
-ROLLUP_CONFIG += import { terser } from 'rollup-plugin-terser';
-ROLLUP_CONFIG += export default {
-ROLLUP_CONFIG +=   output: { format: 'iife', name: 'THREE', sourcemap: true },
-ROLLUP_CONFIG +=   plugins: [terser()],
-ROLLUP_CONFIG += }
-
-WEBPACK_FLAGS += --devtool=sourcemap
-WEBPACK_FLAGS += --mode=production
-WEBPACK_FLAGS += --output-library THREE
-
-PARCEL_FLAGS += --global THREE
-PARCEL_FLAGS += --no-autoinstall
-PARCEL_FLAGS += --out-dir .
-PARCEL_FLAGS += --public-url ./
-
-FUSEBOX_RUN += require('fuse-box').fusebox({
-FUSEBOX_RUN +=   target: 'browser',
-FUSEBOX_RUN +=   entry: './fusebox-entry.js',
-FUSEBOX_RUN +=   useSingleBundle: true,
-FUSEBOX_RUN +=   output: './dist',
-FUSEBOX_RUN += }).runProd();
-
-node_modules:
-	npm ci
 
 ################################################################################
 
@@ -120,6 +95,28 @@ bench/three: | github/three
 
 ################################################################################
 
+THREE_ROLLUP_CONFIG += import { terser } from 'rollup-plugin-terser';
+THREE_ROLLUP_CONFIG += export default {
+THREE_ROLLUP_CONFIG +=   output: { format: 'iife', name: 'THREE', sourcemap: true },
+THREE_ROLLUP_CONFIG +=   plugins: [terser()],
+THREE_ROLLUP_CONFIG += }
+
+THREE_WEBPACK_FLAGS += --devtool=sourcemap
+THREE_WEBPACK_FLAGS += --mode=production
+THREE_WEBPACK_FLAGS += --output-library THREE
+
+THREE_PARCEL_FLAGS += --global THREE
+THREE_PARCEL_FLAGS += --no-autoinstall
+THREE_PARCEL_FLAGS += --out-dir .
+THREE_PARCEL_FLAGS += --public-url ./
+
+THREE_FUSEBOX_RUN += require('fuse-box').fusebox({
+THREE_FUSEBOX_RUN +=   target: 'browser',
+THREE_FUSEBOX_RUN +=   entry: './fusebox-entry.js',
+THREE_FUSEBOX_RUN +=   useSingleBundle: true,
+THREE_FUSEBOX_RUN +=   output: './dist',
+THREE_FUSEBOX_RUN += }).runProd();
+
 demo-three: demo-three-esbuild demo-three-rollup demo-three-webpack demo-three-parcel demo-three-fusebox
 
 demo-three-esbuild: esbuild | demo/three
@@ -131,26 +128,26 @@ demo-three-esbuild: esbuild | demo/three
 demo-three-rollup: | node_modules demo/three
 	rm -fr demo/three/rollup
 	mkdir -p demo/three/rollup
-	echo "$(ROLLUP_CONFIG)" > demo/three/rollup/config.js
+	echo "$(THREE_ROLLUP_CONFIG)" > demo/three/rollup/config.js
 	cd demo/three/rollup && time -p ../../../node_modules/.bin/rollup ../src/Three.js -o Three.rollup.js -c config.js
 	du -h demo/three/rollup/Three.rollup.js*
 
 demo-three-webpack: | node_modules demo/three
 	rm -fr demo/three/webpack node_modules/.cache/terser-webpack-plugin
 	mkdir -p demo/three/webpack
-	cd demo/three/webpack && time -p ../../../node_modules/.bin/webpack ../src/Three.js $(WEBPACK_FLAGS) -o Three.webpack.js
+	cd demo/three/webpack && time -p ../../../node_modules/.bin/webpack ../src/Three.js $(THREE_WEBPACK_FLAGS) -o Three.webpack.js
 	du -h demo/three/webpack/Three.webpack.js*
 
 demo-three-parcel: | node_modules demo/three
 	rm -fr demo/three/parcel
 	mkdir -p demo/three/parcel
-	cd demo/three/parcel && time -p ../../../node_modules/.bin/parcel build ../src/Three.js $(PARCEL_FLAGS) --out-file Three.parcel.js
+	cd demo/three/parcel && time -p ../../../node_modules/.bin/parcel build ../src/Three.js $(THREE_PARCEL_FLAGS) --out-file Three.parcel.js
 	du -h demo/three/parcel/Three.parcel.js*
 
 demo-three-fusebox: | node_modules demo/three
 	rm -fr demo/three/fusebox
 	mkdir -p demo/three/fusebox
-	echo "$(FUSEBOX_RUN)" > demo/three/fusebox/run.js
+	echo "$(THREE_FUSEBOX_RUN)" > demo/three/fusebox/run.js
 	echo 'import * as THREE from "../src/Three.js"; window.THREE = THREE' > demo/three/fusebox/fusebox-entry.js
 	cd demo/three/fusebox && time -p node run.js
 	du -h demo/three/fusebox/dist/app.js*
@@ -168,26 +165,111 @@ bench-three-esbuild: esbuild | bench/three
 bench-three-rollup: | node_modules bench/three
 	rm -fr bench/three/rollup
 	mkdir -p bench/three/rollup
-	echo "$(ROLLUP_CONFIG)" > bench/three/rollup/config.js
+	echo "$(THREE_ROLLUP_CONFIG)" > bench/three/rollup/config.js
 	cd bench/three/rollup && time -p ../../../node_modules/.bin/rollup ../entry.js -o entry.rollup.js -c config.js
 	du -h bench/three/rollup/entry.rollup.js*
 
 bench-three-webpack: | node_modules bench/three
 	rm -fr bench/three/webpack node_modules/.cache/terser-webpack-plugin
 	mkdir -p bench/three/webpack
-	cd bench/three/webpack && time -p ../../../node_modules/.bin/webpack ../entry.js $(WEBPACK_FLAGS) -o entry.webpack.js
+	cd bench/three/webpack && time -p ../../../node_modules/.bin/webpack ../entry.js $(THREE_WEBPACK_FLAGS) -o entry.webpack.js
 	du -h bench/three/webpack/entry.webpack.js*
 
 bench-three-parcel: | node_modules bench/three
 	rm -fr bench/three/parcel
 	mkdir -p bench/three/parcel
-	cd bench/three/parcel && time -p ../../../node_modules/.bin/parcel build ../entry.js $(PARCEL_FLAGS) --out-file entry.parcel.js
+	cd bench/three/parcel && time -p ../../../node_modules/.bin/parcel build ../entry.js $(THREE_PARCEL_FLAGS) --out-file entry.parcel.js
 	du -h bench/three/parcel/entry.parcel.js*
 
 bench-three-fusebox: | node_modules bench/three
 	rm -fr bench/three/fusebox
 	mkdir -p bench/three/fusebox
-	echo "$(FUSEBOX_RUN)" > bench/three/fusebox/run.js
+	echo "$(THREE_FUSEBOX_RUN)" > bench/three/fusebox/run.js
 	echo 'import * as THREE from "../entry.js"; window.THREE = THREE' > bench/three/fusebox/fusebox-entry.js
 	cd bench/three/fusebox && time -p node --max-old-space-size=8192 run.js
 	du -h bench/three/fusebox/dist/app.js*
+
+################################################################################
+
+ROME_TSCONFIG += {
+ROME_TSCONFIG +=   \"compilerOptions\": {
+ROME_TSCONFIG +=     \"sourceMap\": true,
+ROME_TSCONFIG +=     \"esModuleInterop\": true,
+ROME_TSCONFIG +=     \"resolveJsonModule\": true,
+ROME_TSCONFIG +=     \"moduleResolution\": \"node\",
+ROME_TSCONFIG +=     \"target\": \"es2019\",
+ROME_TSCONFIG +=     \"module\": \"commonjs\",
+ROME_TSCONFIG +=     \"baseUrl\": \".\"
+ROME_TSCONFIG +=   }
+ROME_TSCONFIG += }
+
+ROME_WEBPACK_CONFIG += module.exports = {
+ROME_WEBPACK_CONFIG +=   entry: '../src/entry.ts',
+ROME_WEBPACK_CONFIG +=   mode: 'production',
+ROME_WEBPACK_CONFIG +=   target: 'node',
+ROME_WEBPACK_CONFIG +=   devtool: 'sourcemap',
+ROME_WEBPACK_CONFIG +=   module: { rules: [{ test: /\.ts$$/, loader: 'ts-loader', options: { transpileOnly: true } }] },
+ROME_WEBPACK_CONFIG +=   resolve: {
+ROME_WEBPACK_CONFIG +=     extensions: ['.ts', '.js'],
+ROME_WEBPACK_CONFIG +=     alias: { rome: __dirname + '/../src/rome', '@romejs': __dirname + '/../src/@romejs' },
+ROME_WEBPACK_CONFIG +=   },
+ROME_WEBPACK_CONFIG +=   output: { filename: 'rome.webpack.js', path: __dirname },
+ROME_WEBPACK_CONFIG += };
+
+ROME_PARCEL_FLAGS += --bundle-node-modules
+ROME_PARCEL_FLAGS += --no-autoinstall
+ROME_PARCEL_FLAGS += --out-dir .
+ROME_PARCEL_FLAGS += --public-url ./
+ROME_PARCEL_FLAGS += --target node
+
+github/rome:
+	mkdir -p github/rome
+	cd github/rome && git init && git remote add origin git@github.com:facebookexperimental/rome.git
+	cd github/rome && git fetch --depth 1 origin d95a3a7aab90773c9b36d9c82a08c8c4c6b68aa5 && git checkout FETCH_HEAD
+
+bench/rome: | github/rome
+	mkdir -p bench/rome
+	cp -r github/rome/packages bench/rome/src
+	echo "$(ROME_TSCONFIG)" > bench/rome/src/tsconfig.json
+	echo 'import "rome/bin/rome"' > bench/rome/src/entry.ts
+
+	# Patch a cyclic import ordering issue that affects commonjs-style bundlers (webpack and parcel)
+	echo "export { default as createHook } from './api/createHook';" > .temp
+	sed "/createHook/d" bench/rome/src/@romejs/js-compiler/index.ts >> .temp
+	mv .temp bench/rome/src/@romejs/js-compiler/index.ts
+
+	# Fix a bug where parcel doesn't know about one specific node builtin module
+	mkdir -p bench/rome/src/node_modules/inspector
+	touch bench/rome/src/node_modules/inspector/index.js
+
+	# These aliases are required to fix parcel path resolution
+	echo '{ "alias": {' > bench/rome/src/package.json
+	ls bench/rome/src/@romejs | sed 's/.*/"\@romejs\/&": ".\/@romejs\/&",/g' >> bench/rome/src/package.json
+	echo '"rome": "./rome" }}' >> bench/rome/src/package.json
+
+	# Get an approximate line count
+	rm -r bench/rome/src/@romejs/js-parser/test-fixtures
+	echo 'Line count:' && (find bench/rome/src -name '*.ts' && find bench/rome/src -name '*.js') | xargs wc -l | tail -n 1
+
+################################################################################
+
+bench-rome: bench-rome-esbuild bench-rome-webpack bench-rome-parcel
+
+bench-rome-esbuild: esbuild | bench/rome
+	rm -fr bench/rome/esbuild
+	mkdir -p bench/rome/esbuild
+	cd bench/rome/esbuild && time -p ../../../esbuild --bundle --sourcemap --minify ../src/entry.ts --outfile=rome.esbuild.js --platform=node
+	du -h bench/rome/esbuild/rome.esbuild.js*
+
+bench-rome-webpack: | node_modules bench/rome
+	rm -fr bench/rome/webpack node_modules/.cache/terser-webpack-plugin
+	mkdir -p bench/rome/webpack
+	echo "$(ROME_WEBPACK_CONFIG)" > bench/rome/webpack/webpack.config.js
+	cd bench/rome/webpack && time -p ../../../node_modules/.bin/webpack
+	du -h bench/rome/webpack/rome.webpack.js*
+
+bench-rome-parcel: | node_modules bench/rome
+	rm -fr bench/rome/parcel
+	mkdir -p bench/rome/parcel
+	cd bench/rome/parcel && time -p ../../../node_modules/.bin/parcel build ../src/entry.ts $(ROME_PARCEL_FLAGS) --out-file rome.parcel.js
+	du -h bench/rome/parcel/rome.parcel.js*
