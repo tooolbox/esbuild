@@ -415,7 +415,7 @@ func (r *resolver) parseJson(path string) (ast.Expr, bool) {
 	if contents, ok := r.fs.ReadFile(path); ok {
 		log, _ := logging.NewDeferLog()
 		source := logging.Source{Contents: contents}
-		return parser.ParseJson(log, source)
+		return parser.ParseJSON(log, source)
 	}
 	return ast.Expr{}, false
 }
@@ -501,7 +501,8 @@ func (r *resolver) loadNodeModules(path string, dirInfo *dirInfo) (string, bool)
 }
 
 func IsNonModulePath(path string) bool {
-	return strings.HasPrefix(path, "/") || strings.HasPrefix(path, "./") || strings.HasPrefix(path, "../") || path == "."
+	return strings.HasPrefix(path, "/") || strings.HasPrefix(path, "./") ||
+		strings.HasPrefix(path, "../") || path == "." || path == ".."
 }
 
 var externalModulesForNode = []string{

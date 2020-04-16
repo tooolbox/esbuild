@@ -231,6 +231,7 @@ type Lexer struct {
 	Identifier                      string
 	Number                          float64
 	rescanCloseBraceAsTemplateToken bool
+	isStrictJSON                    bool
 
 	// The log is disabled during speculative scans that may backtrack
 	IsLogDisabled bool
@@ -242,6 +243,17 @@ func NewLexer(log logging.Log, source logging.Source) Lexer {
 	lexer := Lexer{
 		log:    log,
 		source: source,
+	}
+	lexer.step()
+	lexer.Next()
+	return lexer
+}
+
+func NewLexerJSON(log logging.Log, source logging.Source) Lexer {
+	lexer := Lexer{
+		log:          log,
+		source:       source,
+		isStrictJSON: true,
 	}
 	lexer.step()
 	lexer.Next()
@@ -299,8 +311,10 @@ func (lexer *Lexer) SyntaxError() {
 			message = fmt.Sprintf("Syntax error \"\\x%02X\"", c)
 		} else if c >= 0x80 {
 			message = fmt.Sprintf("Syntax error \"\\u{%x}\"", c)
-		} else {
+		} else if c != '"' {
 			message = fmt.Sprintf("Syntax error \"%c\"", c)
+		} else {
+			message = "Syntax error '\"'"
 		}
 	}
 	lexer.addError(loc, message)
@@ -986,6 +1000,9 @@ func (lexer *Lexer) Next() {
 						break singleLineComment
 					}
 				}
+				if lexer.isStrictJSON {
+					lexer.addRangeError(lexer.Range(), "JSON does not support comments")
+				}
 				continue
 
 			case '*':
@@ -1013,6 +1030,9 @@ func (lexer *Lexer) Next() {
 					default:
 						lexer.step()
 					}
+				}
+				if lexer.isStrictJSON {
+					lexer.addRangeError(lexer.Range(), "JSON does not support comments")
 				}
 				continue
 
@@ -1129,7 +1149,7 @@ func (lexer *Lexer) Next() {
 					lexer.step()
 
 					// Handle Windows CRLF
-					if lexer.codePoint == '\r' {
+					if lexer.codePoint == '\r' && !lexer.isStrictJSON {
 						lexer.step()
 						if lexer.codePoint == '\n' {
 							lexer.step()
@@ -1170,6 +1190,8 @@ func (lexer *Lexer) Next() {
 					// Non-ASCII strings need the slow path
 					if lexer.codePoint >= 0x80 {
 						isASCII = false
+					} else if lexer.isStrictJSON && lexer.codePoint < 0x20 {
+						lexer.SyntaxError()
 					}
 				}
 				lexer.step()
@@ -1188,6 +1210,10 @@ func (lexer *Lexer) Next() {
 					copy[i] = uint16(text[i])
 				}
 				lexer.StringLiteral = copy
+			}
+
+			if quote == '\'' && lexer.isStrictJSON {
+				lexer.addRangeError(lexer.Range(), "JSON strings must use double quotes")
 			}
 
 		case '_', '$',
@@ -1751,8 +1777,7 @@ func (lexer *Lexer) decodeEscapeSequences(start int, text string) []uint16 {
 		c, width := utf8.DecodeRuneInString(text[i:])
 		i += width
 
-		switch c {
-		case '\\':
+		if c == '\\' {
 			c2, width2 := utf8.DecodeRuneInString(text[i:])
 			i += width2
 
@@ -1778,10 +1803,20 @@ func (lexer *Lexer) decodeEscapeSequences(start int, text string) []uint16 {
 				continue
 
 			case 'v':
+				if lexer.isStrictJSON {
+					lexer.end = start + i - width2
+					lexer.SyntaxError()
+				}
+
 				decoded = append(decoded, '\v')
 				continue
 
 			case '0', '1', '2', '3', '4', '5', '6', '7':
+				if lexer.isStrictJSON {
+					lexer.end = start + i - width2
+					lexer.SyntaxError()
+				}
+
 				// 1-3 digit octal
 				value := c2 - '0'
 				c3, width3 := utf8.DecodeRuneInString(text[i:])
@@ -1802,6 +1837,11 @@ func (lexer *Lexer) decodeEscapeSequences(start int, text string) []uint16 {
 				c = value
 
 			case 'x':
+				if lexer.isStrictJSON {
+					lexer.end = start + i - width2
+					lexer.SyntaxError()
+				}
+
 				// 2-digit hexadecimal
 				value := '\000'
 				for j := 0; j < 2; j++ {
@@ -1830,6 +1870,11 @@ func (lexer *Lexer) decodeEscapeSequences(start int, text string) []uint16 {
 				i += width3
 
 				if c3 == '{' {
+					if lexer.isStrictJSON {
+						lexer.end = start + i - width2
+						lexer.SyntaxError()
+					}
+
 					// Variable-length
 					hexStart := i - width - width2 - width3
 					isFirst := true
@@ -1893,6 +1938,11 @@ func (lexer *Lexer) decodeEscapeSequences(start int, text string) []uint16 {
 				c = value
 
 			case '\r':
+				if lexer.isStrictJSON {
+					lexer.end = start + i - width2
+					lexer.SyntaxError()
+				}
+
 				// Ignore line continuations. A line continuation is not an escaped newline.
 				if i < len(text) && text[i] == '\n' {
 					// Make sure Windows CRLF counts as a single newline
@@ -1901,10 +1951,25 @@ func (lexer *Lexer) decodeEscapeSequences(start int, text string) []uint16 {
 				continue
 
 			case '\n', '\u2028', '\u2029':
+				if lexer.isStrictJSON {
+					lexer.end = start + i - width2
+					lexer.SyntaxError()
+				}
+
 				// Ignore line continuations. A line continuation is not an escaped newline.
 				continue
 
 			default:
+				if lexer.isStrictJSON {
+					switch c2 {
+					case '"', '\\', '/':
+
+					default:
+						lexer.end = start + i - width2
+						lexer.SyntaxError()
+					}
+				}
+
 				c = c2
 			}
 		}

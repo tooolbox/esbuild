@@ -53,7 +53,7 @@ func expectPrinted(t *testing.T, contents string, expected string) {
 		if !ok {
 			t.Fatal("Parse error")
 		}
-		js, _ := printer.Print(ast, printer.Options{})
+		js := printer.Print(ast, printer.Options{}).JS
 		assertEqual(t, string(js), expected)
 	})
 }
@@ -78,7 +78,7 @@ func expectPrintedMangle(t *testing.T, contents string, expected string) {
 		if !ok {
 			t.Fatal("Parse error")
 		}
-		js, _ := printer.Print(ast, printer.Options{})
+		js := printer.Print(ast, printer.Options{}).JS
 		assertEqual(t, string(js), expected)
 	})
 }
@@ -104,7 +104,7 @@ func expectPrintedTarget(t *testing.T, target LanguageTarget, contents string, e
 		if !ok {
 			t.Fatal("Parse error")
 		}
-		js, _ := printer.Print(ast, printer.Options{})
+		js := printer.Print(ast, printer.Options{}).JS
 		assertEqual(t, string(js), expected)
 	})
 }
@@ -153,7 +153,7 @@ func expectPrintedJSX(t *testing.T, contents string, expected string) {
 		if !ok {
 			t.Fatal("Parse error")
 		}
-		js, _ := printer.Print(ast, printer.Options{})
+		js := printer.Print(ast, printer.Options{}).JS
 		assertEqual(t, string(js), expected)
 	})
 }
@@ -1395,5 +1395,5 @@ func TestLowerOptionalChain(t *testing.T) {
 
 func TestLowerOptionalCatchBinding(t *testing.T) {
 	expectPrintedTarget(t, ES2019, "try {} catch {}", "try {\n} catch {\n}\n")
-	expectPrintedTarget(t, ES2018, "try {} catch {}", "try {\n} catch ({}) {\n}\n")
+	expectPrintedTarget(t, ES2018, "try {} catch {}", "try {\n} catch (e) {\n}\n")
 }

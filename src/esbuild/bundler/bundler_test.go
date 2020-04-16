@@ -1523,6 +1523,144 @@ func TestPackageJsonBrowserMapAvoidMissing(t *testing.T) {
 	})
 }
 
+func TestRequireChildDirCommonJS(t *testing.T) {
+	expectBundled(t, bundled{
+		files: map[string]string{
+			"/Users/user/project/src/entry.js": `
+				console.log(require('./dir'))
+			`,
+			"/Users/user/project/src/dir/index.js": `
+				module.exports = 123
+			`,
+		},
+		entryPaths: []string{"/Users/user/project/src/entry.js"},
+		parseOptions: parser.ParseOptions{
+			IsBundling: true,
+		},
+		bundleOptions: BundleOptions{
+			Bundle:        true,
+			AbsOutputFile: "/out.js",
+		},
+		expected: map[string]string{
+			"/out.js": `bootstrap({
+  0(require, exports, module) {
+    // /Users/user/project/src/dir/index.js
+    module.exports = 123;
+  },
+
+  1(require) {
+    // /Users/user/project/src/entry.js
+    console.log(require(0 /* ./dir */));
+  }
+}, 1);
+`,
+		},
+	})
+}
+
+func TestRequireChildDirES6(t *testing.T) {
+	expectBundled(t, bundled{
+		files: map[string]string{
+			"/Users/user/project/src/entry.js": `
+				import value from './dir'
+				console.log(value)
+			`,
+			"/Users/user/project/src/dir/index.js": `
+				export default 123
+			`,
+		},
+		entryPaths: []string{"/Users/user/project/src/entry.js"},
+		parseOptions: parser.ParseOptions{
+			IsBundling: true,
+		},
+		bundleOptions: BundleOptions{
+			Bundle:        true,
+			AbsOutputFile: "/out.js",
+		},
+		expected: map[string]string{
+			"/out.js": `bootstrap({
+  1() {
+    // /Users/user/project/src/dir/index.js
+    const default2 = 123;
+
+    // /Users/user/project/src/entry.js
+    console.log(default2);
+  }
+}, 1);
+`,
+		},
+	})
+}
+
+func TestRequireParentDirCommonJS(t *testing.T) {
+	expectBundled(t, bundled{
+		files: map[string]string{
+			"/Users/user/project/src/dir/entry.js": `
+				console.log(require('..'))
+			`,
+			"/Users/user/project/src/index.js": `
+				module.exports = 123
+			`,
+		},
+		entryPaths: []string{"/Users/user/project/src/dir/entry.js"},
+		parseOptions: parser.ParseOptions{
+			IsBundling: true,
+		},
+		bundleOptions: BundleOptions{
+			Bundle:        true,
+			AbsOutputFile: "/out.js",
+		},
+		expected: map[string]string{
+			"/out.js": `bootstrap({
+  1(require, exports, module) {
+    // /Users/user/project/src/index.js
+    module.exports = 123;
+  },
+
+  0(require) {
+    // /Users/user/project/src/dir/entry.js
+    console.log(require(1 /* .. */));
+  }
+}, 0);
+`,
+		},
+	})
+}
+
+func TestRequireParentDirES6(t *testing.T) {
+	expectBundled(t, bundled{
+		files: map[string]string{
+			"/Users/user/project/src/dir/entry.js": `
+				import value from '..'
+				console.log(value)
+			`,
+			"/Users/user/project/src/index.js": `
+				export default 123
+			`,
+		},
+		entryPaths: []string{"/Users/user/project/src/dir/entry.js"},
+		parseOptions: parser.ParseOptions{
+			IsBundling: true,
+		},
+		bundleOptions: BundleOptions{
+			Bundle:        true,
+			AbsOutputFile: "/out.js",
+		},
+		expected: map[string]string{
+			"/out.js": `bootstrap({
+  0() {
+    // /Users/user/project/src/index.js
+    const default2 = 123;
+
+    // /Users/user/project/src/dir/entry.js
+    console.log(default2);
+  }
+}, 0);
+`,
+		},
+	})
+}
+
 func TestPackageImportMissingES6(t *testing.T) {
 	expectBundled(t, bundled{
 		files: map[string]string{
@@ -2261,6 +2399,7 @@ func TestMinifiedBundleES6(t *testing.T) {
 				export function foo() {
 					return 123
 				}
+				foo()
 			`,
 		},
 		entryPaths: []string{"/entry.js"},
@@ -2275,7 +2414,7 @@ func TestMinifiedBundleES6(t *testing.T) {
 			AbsOutputFile:     "/out.js",
 		},
 		expected: map[string]string{
-			"/out.js": `bootstrap({1(){function a(){return 123}console.log(a())}},1);
+			"/out.js": `bootstrap({1(){function a(){return 123}a();console.log(a())}},1);
 `,
 		},
 	})
@@ -2310,6 +2449,56 @@ func TestMinifiedBundleCommonJS(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({0(b,a){a.foo=function(){return 123}},2(c,b,a){a.exports={test:!0}},1(a){const{foo:b}=a(0);console.log(b(),a(2))}},1);
+`,
+		},
+	})
+}
+
+func TestMinifiedBundleEndingWithImportantSemicolon(t *testing.T) {
+	expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				while(foo()); // This must not be stripped
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		parseOptions: parser.ParseOptions{
+			IsBundling: true,
+		},
+		bundleOptions: BundleOptions{
+			Bundle:           true,
+			RemoveWhitespace: true,
+			AbsOutputFile:    "/out.js",
+		},
+		expected: map[string]string{
+			"/out.js": `bootstrap({0(){while(foo());}},0);
+`,
+		},
+	})
+}
+
+func TestOptionalCatchNameCollision(t *testing.T) {
+	expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				try {}
+				catch { var e, e2 }
+				var e3
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		parseOptions: parser.ParseOptions{
+			Target: parser.ES2018,
+		},
+		bundleOptions: BundleOptions{
+			AbsOutputFile: "/out.js",
+		},
+		expected: map[string]string{
+			"/out.js": `try {
+} catch (e4) {
+  var e, e2;
+}
+var e3;
 `,
 		},
 	})

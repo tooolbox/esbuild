@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"fmt"
+
 	"github.com/tooolbox/esbuild/src/esbuild/ast"
 	"github.com/tooolbox/esbuild/src/esbuild/lexer"
 	"github.com/tooolbox/esbuild/src/esbuild/logging"
@@ -38,18 +40,23 @@ func (p *jsonParser) parseExpr() ast.Expr {
 		p.lexer.Next()
 		return ast.Expr{loc, &ast.ENumber{value}}
 
+	case lexer.TMinus:
+		p.lexer.Next()
+		value := p.lexer.Number
+		p.lexer.Expect(lexer.TNumericLiteral)
+		return ast.Expr{loc, &ast.ENumber{-value}}
+
 	case lexer.TOpenBracket:
 		p.lexer.Next()
 		items := []ast.Expr{}
 
 		for p.lexer.Token != lexer.TCloseBracket {
+			if len(items) > 0 {
+				p.lexer.Expect(lexer.TComma)
+			}
+
 			item := p.parseExpr()
 			items = append(items, item)
-
-			if p.lexer.Token != lexer.TComma {
-				break
-			}
-			p.lexer.Next()
 		}
 
 		p.lexer.Expect(lexer.TCloseBracket)
@@ -58,10 +65,26 @@ func (p *jsonParser) parseExpr() ast.Expr {
 	case lexer.TOpenBrace:
 		p.lexer.Next()
 		properties := []ast.Property{}
+		duplicates := make(map[string]bool)
 
 		for p.lexer.Token != lexer.TCloseBrace {
-			key := ast.Expr{p.lexer.Loc(), &ast.EString{p.lexer.StringLiteral}}
+			if len(properties) > 0 {
+				p.lexer.Expect(lexer.TComma)
+			}
+
+			keyString := p.lexer.StringLiteral
+			keyRange := p.lexer.Range()
+			key := ast.Expr{keyRange.Loc, &ast.EString{keyString}}
 			p.lexer.Expect(lexer.TStringLiteral)
+
+			// Warn about duplicate keys
+			keyText := lexer.UTF16ToString(keyString)
+			if duplicates[keyText] {
+				p.log.AddRangeWarning(p.source, keyRange, fmt.Sprintf("Duplicate key: %q", keyText))
+			} else {
+				duplicates[keyText] = true
+			}
+
 			p.lexer.Expect(lexer.TColon)
 			value := p.parseExpr()
 
@@ -71,11 +94,6 @@ func (p *jsonParser) parseExpr() ast.Expr {
 				Value: &value,
 			}
 			properties = append(properties, property)
-
-			if p.lexer.Token != lexer.TComma {
-				break
-			}
-			p.lexer.Next()
 		}
 
 		p.lexer.Expect(lexer.TCloseBrace)
@@ -87,7 +105,7 @@ func (p *jsonParser) parseExpr() ast.Expr {
 	}
 }
 
-func ParseJson(log logging.Log, source logging.Source) (result ast.Expr, ok bool) {
+func ParseJSON(log logging.Log, source logging.Source) (result ast.Expr, ok bool) {
 	ok = true
 	defer func() {
 		r := recover()
@@ -101,9 +119,10 @@ func ParseJson(log logging.Log, source logging.Source) (result ast.Expr, ok bool
 	p := &jsonParser{
 		log:    log,
 		source: source,
-		lexer:  lexer.NewLexer(log, source),
+		lexer:  lexer.NewLexerJSON(log, source),
 	}
 
 	result = p.parseExpr()
+	p.lexer.Expect(lexer.TEndOfFile)
 	return
 }
