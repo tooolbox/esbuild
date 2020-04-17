@@ -14,7 +14,6 @@ platform-all: update-version-go test
 	make -j5 platform-windows platform-darwin platform-linux platform-wasm platform-neutral
 
 platform-windows:
-	mkdir -p npm/esbuild-windows-64/bin
 	cd npm/esbuild-windows-64 && npm version "$(ESBUILD_VERSION)" --allow-same-version
 	GOOS=windows GOARCH=amd64 go build -o npm/esbuild-windows-64/esbuild.exe
 
@@ -55,10 +54,11 @@ publish-neutral: platform-neutral
 	[ ! -z "$(OTP)" ] && cd npm/esbuild && npm publish --otp="$(OTP)"
 
 clean:
-	rm -f esbuild npm/esbuild-wasm/esbuild.wasm npm/esbuild-wasm/wasm_exec.js
+	rm -f esbuild
 	rm -f npm/esbuild-windows-64/esbuild.exe
 	rm -rf npm/esbuild-darwin-64/bin
 	rm -rf npm/esbuild-linux-64/bin
+	rm -f npm/esbuild-wasm/esbuild.wasm npm/esbuild-wasm/wasm_exec.js
 
 node_modules:
 	npm ci

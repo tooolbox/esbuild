@@ -207,7 +207,10 @@ func DefaultExtensionToLoaderMap() map[string]Loader {
 }
 
 type BundleOptions struct {
-	Bundle                bool
+	// true: imports are scanned and bundled along with the file
+	// false: imports are left alone and the file is passed through as-is
+	IsBundling bool
+
 	AbsOutputFile         string
 	AbsOutputDir          string
 	RemoveWhitespace      bool
@@ -249,13 +252,13 @@ func (b *Bundle) compileFile(
 	}
 	tree := f.ast
 	indent := 0
-	if options.Bundle {
+	if options.IsBundling {
 		indent = 2
 	}
 
 	// Remap source indices to make the output deterministic
 	var remappedResolvedImports map[string]uint32
-	if options.Bundle {
+	if options.IsBundling {
 		remappedResolvedImports = make(map[string]uint32)
 		for k, v := range f.resolvedImports {
 			remappedResolvedImports[k] = sourceIndexToOutputIndex[v]
@@ -621,7 +624,7 @@ func includeDecls(decls []ast.Decl, symbols *ast.SymbolMap, exports map[string]a
 }
 
 func (b *Bundle) extractImportsAndExports(
-	files []file, symbols *ast.SymbolMap, sourceIndex uint32,
+	log logging.Log, files []file, symbols *ast.SymbolMap, sourceIndex uint32,
 	moduleInfos []moduleInfo, namespaceImportMap map[ast.Ref]ast.ENamespaceImport,
 ) {
 	file := &files[sourceIndex]
@@ -654,10 +657,7 @@ func (b *Bundle) extractImportsAndExports(
 		switch s := stmt.Data.(type) {
 		case *ast.SImport:
 			otherSourceIndex, ok := file.resolvedImports[s.Path.Text]
-			if !ok {
-				panic("Internal error")
-			}
-			isInSameGroup := moduleInfos[otherSourceIndex].groupLabel == meta.groupLabel
+			isInSameGroup := ok && moduleInfos[otherSourceIndex].groupLabel == meta.groupLabel
 			namespaceLoc := stmt.Loc
 			if s.StarLoc != nil {
 				namespaceLoc = *s.StarLoc
@@ -719,10 +719,7 @@ func (b *Bundle) extractImportsAndExports(
 			}
 
 			otherSourceIndex, ok := file.resolvedImports[s.Path.Text]
-			if !ok {
-				panic("Internal error")
-			}
-			isInSameGroup := moduleInfos[otherSourceIndex].groupLabel == meta.groupLabel
+			isInSameGroup := ok && moduleInfos[otherSourceIndex].groupLabel == meta.groupLabel
 
 			if isInSameGroup {
 				// Add imports so we can bind symbols later
@@ -781,18 +778,21 @@ func (b *Bundle) extractImportsAndExports(
 
 		case *ast.SExportStar:
 			otherSourceIndex, ok := file.resolvedImports[s.Path.Text]
-			if !ok {
-				panic("Internal error")
-			}
-			isInSameGroup := moduleInfos[otherSourceIndex].groupLabel == meta.groupLabel
 
 			if s.Item == nil {
-				// "export * from 'path'"
-				meta.exportStars = append(meta.exportStars, exportStar{otherSourceIndex, s.Path})
+				if !ok {
+					source := b.sources[sourceIndex]
+					log.AddRangeError(source, source.RangeOfString(s.Path.Loc),
+						"Wildcard exports are not supported for this module")
+				} else {
+					// "export * from 'path'"
+					meta.exportStars = append(meta.exportStars, exportStar{otherSourceIndex, s.Path})
+				}
 			} else {
 				// "export * as ns from 'path'"
 				meta.exports[s.Item.Alias] = s.Item.Name.Ref
 
+				isInSameGroup := ok && moduleInfos[otherSourceIndex].groupLabel == meta.groupLabel
 				if isInSameGroup {
 					// Add imports so we can bind symbols later
 					meta.imports = append(meta.imports, importData{"*", stmt.Loc, otherSourceIndex, s.Item.Name})
@@ -878,7 +878,7 @@ func (b *Bundle) bindImportsAndExports(
 
 	// Scan for information about imports and exports
 	for _, sourceIndex := range group {
-		b.extractImportsAndExports(files, symbols, sourceIndex, moduleInfos, namespaceImportMap)
+		b.extractImportsAndExports(log, files, symbols, sourceIndex, moduleInfos, namespaceImportMap)
 	}
 
 	// Process "export *" statements
@@ -1187,7 +1187,7 @@ func (b *Bundle) Compile(log logging.Log, options BundleOptions) []BundleResult 
 		options.ExtensionToLoader = DefaultExtensionToLoaderMap()
 	}
 
-	if options.Bundle {
+	if options.IsBundling {
 		return b.compileBundle(log, options)
 	} else {
 		return b.compileIndependent(log, options)

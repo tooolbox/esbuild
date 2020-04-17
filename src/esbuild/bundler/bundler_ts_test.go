@@ -23,7 +23,7 @@ func TestTSDeclareConst(t *testing.T) {
 			IsBundling: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:        true,
+			IsBundling:    true,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -55,7 +55,7 @@ func TestTSDeclareLet(t *testing.T) {
 			IsBundling: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:        true,
+			IsBundling:    true,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -87,7 +87,7 @@ func TestTSDeclareVar(t *testing.T) {
 			IsBundling: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:        true,
+			IsBundling:    true,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -119,7 +119,7 @@ func TestTSDeclareClass(t *testing.T) {
 			IsBundling: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:        true,
+			IsBundling:    true,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -152,7 +152,7 @@ func TestTSDeclareFunction(t *testing.T) {
 			IsBundling: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:        true,
+			IsBundling:    true,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -184,7 +184,7 @@ func TestTSDeclareNamespace(t *testing.T) {
 			IsBundling: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:        true,
+			IsBundling:    true,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -217,7 +217,7 @@ func TestTSDeclareEnum(t *testing.T) {
 			IsBundling: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:        true,
+			IsBundling:    true,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -250,7 +250,7 @@ func TestTSDeclareConstEnum(t *testing.T) {
 			IsBundling: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:        true,
+			IsBundling:    true,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -282,7 +282,7 @@ func TestTSImportEmptyNamespace(t *testing.T) {
 			IsBundling: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:        true,
+			IsBundling:    true,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -315,7 +315,7 @@ func TestPackageImportMissingTS(t *testing.T) {
 			IsBundling: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:        true,
+			IsBundling:    true,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -347,7 +347,7 @@ func TestTSImportMissingFile(t *testing.T) {
 			IsBundling: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:        true,
+			IsBundling:    true,
 			AbsOutputFile: "/out.js",
 		},
 		expectedScanLog: "/entry.ts: error: Could not resolve \"./doesNotExist.ts\"\n",
@@ -369,7 +369,7 @@ func TestTSImportTypeOnlyFile(t *testing.T) {
 			IsBundling: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:        true,
+			IsBundling:    true,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -401,7 +401,7 @@ func TestTSExportEquals(t *testing.T) {
 			IsBundling: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:        true,
+			IsBundling:    true,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -446,7 +446,7 @@ func TestTSExportNamespace(t *testing.T) {
 			IsBundling: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:        true,
+			IsBundling:    true,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -588,7 +588,7 @@ func TestTSImportVsLocalCollisionAllTypes(t *testing.T) {
 			IsBundling: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:        true,
+			IsBundling:    true,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -631,7 +631,7 @@ func TestTSImportVsLocalCollisionMixed(t *testing.T) {
 			IsBundling: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:        true,
+			IsBundling:    true,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -675,7 +675,7 @@ func TestTSMinifiedBundleES6(t *testing.T) {
 			MangleSyntax: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:            true,
+			IsBundling:        true,
 			RemoveWhitespace:  true,
 			MinifyIdentifiers: true,
 			AbsOutputFile:     "/out.js",
@@ -709,7 +709,7 @@ func TestTSMinifiedBundleCommonJS(t *testing.T) {
 			MangleSyntax: true,
 		},
 		bundleOptions: BundleOptions{
-			Bundle:            true,
+			IsBundling:        true,
 			RemoveWhitespace:  true,
 			MinifyIdentifiers: true,
 			AbsOutputFile:     "/out.js",
