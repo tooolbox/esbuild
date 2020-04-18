@@ -51,7 +51,7 @@ func expectPrintedTS(t *testing.T, contents string, expected string) {
 		if !ok {
 			t.Fatal("Parse error")
 		}
-		js := printer.Print(ast, printer.Options{}).JS
+		js := printer.Print(ast, printer.PrintOptions{}).JS
 		assertEqual(t, string(js), expected)
 	})
 }
@@ -106,7 +106,7 @@ func expectPrintedTSX(t *testing.T, contents string, expected string) {
 		if !ok {
 			t.Fatal("Parse error")
 		}
-		js := printer.Print(ast, printer.Options{}).JS
+		js := printer.Print(ast, printer.PrintOptions{}).JS
 		assertEqual(t, string(js), expected)
 	})
 }

@@ -153,8 +153,7 @@ Options:
   --target=...          Language target (default esnext)
   --platform=...        Platform target (browser or node, default browser)
   --external:M          Exclude module M from the bundle
-  --loader:X=L          Use loader L to load file extension X, where L is
-                        one of: js, jsx, ts, tsx, json, text, base64
+  --format=...          Output format (iife or cjs)
 
   --minify              Sets all --minify-* flags
   --minify-whitespace   Remove whitespace
@@ -164,6 +163,8 @@ Options:
   --define:K=V          Substitute K with V while parsing
   --jsx-factory=...     What to use instead of React.createElement
   --jsx-fragment=...    What to use instead of React.Fragment
+  --loader:X=L          Use loader L to load file extension X, where L is
+                        one of: js, jsx, ts, tsx, json, text, base64
 
   --trace=...           Write a CPU trace to this file
   --cpuprofile=...      Write a CPU profile to this file
@@ -299,6 +300,16 @@ Examples:
 				args.exitWithError("Valid platforms: browser, node")
 			}
 
+		case strings.HasPrefix(arg, "--format="):
+			switch arg[len("--format="):] {
+			case "iife":
+				args.bundleOptions.OutputFormat = bundler.FormatIIFE
+			case "cjs":
+				args.bundleOptions.OutputFormat = bundler.FormatCommonJS
+			default:
+				args.exitWithError("Valid formats: iife, cjs")
+			}
+
 		case strings.HasPrefix(arg, "--external:"):
 			path := arg[len("--external:"):]
 			if resolver.IsNonModulePath(path) {
@@ -349,6 +360,16 @@ Examples:
 	if args.bundleOptions.AbsOutputFile != "" {
 		// If the output file is specified, use it to derive the output directory
 		args.bundleOptions.AbsOutputDir = filepath.Dir(args.bundleOptions.AbsOutputFile)
+	}
+
+	if args.bundleOptions.OutputFormat == bundler.FormatNone {
+		// If the format isn't specified, set the default format using the platform
+		switch args.resolveOptions.Platform {
+		case resolver.PlatformBrowser:
+			args.bundleOptions.OutputFormat = bundler.FormatIIFE
+		case resolver.PlatformNode:
+			args.bundleOptions.OutputFormat = bundler.FormatCommonJS
+		}
 	}
 
 	return args

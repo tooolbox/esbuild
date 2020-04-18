@@ -32,6 +32,7 @@ type parser struct {
 	importPaths              []ast.ImportPath
 	omitWarnings             bool
 	allowIn                  bool
+	hasTopLevelReturn        bool
 	currentFnOpts            fnOpts
 	target                   LanguageTarget
 	ts                       TypeScriptOptions
@@ -83,6 +84,7 @@ type parser struct {
 	mangleSyntax      bool
 	isBundling        bool
 	tryBodyCount      int
+	isThisCaptured    bool
 	callTarget        ast.E
 	typeofTarget      ast.E
 	moduleScope       *ast.Scope
@@ -106,8 +108,9 @@ type scopeOrder struct {
 }
 
 type fnOpts struct {
-	allowAwait bool
-	allowYield bool
+	isOutsideFn bool
+	allowAwait  bool
+	allowYield  bool
 
 	// In TypeScript, forward declarations of functions have no bodies
 	allowMissingBodyForTypeScript bool
@@ -4499,6 +4502,9 @@ func (p *parser) parseStmt(opts parseStmtOpts) ast.Stmt {
 		}
 		p.latestReturnHadSemicolon = p.lexer.Token == lexer.TSemicolon
 		p.lexer.ExpectOrInsertSemicolon()
+		if p.currentFnOpts.isOutsideFn {
+			p.hasTopLevelReturn = true
+		}
 		return ast.Stmt{loc, &ast.SReturn{value}}
 
 	case lexer.TThrow:
@@ -6376,6 +6382,10 @@ func (p *parser) visitClass(class *ast.Class) {
 	if class.Extends != nil {
 		*class.Extends = p.visitExpr(*class.Extends)
 	}
+
+	oldIsThisCaptured := p.isThisCaptured
+	p.isThisCaptured = true
+
 	for i, property := range class.Properties {
 		class.Properties[i].Key = p.visitExpr(property.Key)
 		if property.Value != nil {
@@ -6385,6 +6395,8 @@ func (p *parser) visitClass(class *ast.Class) {
 			*property.Initializer = p.visitExpr(*property.Initializer)
 		}
 	}
+
+	p.isThisCaptured = oldIsThisCaptured
 }
 
 func (p *parser) visitArgs(args []ast.Arg) {
@@ -6834,8 +6846,17 @@ func (p *parser) visitExpr(expr ast.Expr) ast.Expr {
 func (p *parser) visitExprInOut(expr ast.Expr, in exprIn) (ast.Expr, exprOut) {
 	switch e := expr.Data.(type) {
 	case *ast.EMissing, *ast.ENull, *ast.ESuper, *ast.EString,
-		*ast.EBoolean, *ast.ENumber, *ast.EBigInt, *ast.EThis,
+		*ast.EBoolean, *ast.ENumber, *ast.EBigInt,
 		*ast.ERegExp, *ast.ENewTarget, *ast.EUndefined:
+
+	case *ast.EThis:
+		// In a CommonJS module, "this" is supposed to be the same as "exports".
+		// Instead of doing this at runtime using "fn.call(module.exports)", we
+		// do it at compile time using expression substitution here.
+		if p.isBundling && !p.isThisCaptured {
+			p.symbols[p.exportsRef.InnerIndex].UseCountEstimate++
+			return ast.Expr{expr.Loc, &ast.EIdentifier{p.exportsRef}}, exprOut{}
+		}
 
 	case *ast.EImportMeta:
 		if p.isBundling {
@@ -7520,7 +7541,9 @@ func extractNumericValues(left ast.Expr, right ast.Expr) (float64, float64, bool
 
 func (p *parser) visitFn(fn *ast.Fn, scopeLoc ast.Loc) {
 	oldTryBodyCount := p.tryBodyCount
+	oldIsThisCaptured := p.isThisCaptured
 	p.tryBodyCount = 0
+	p.isThisCaptured = true
 
 	p.pushScopeForVisitPass(ast.ScopeEntry, scopeLoc)
 	p.visitArgs(fn.Args)
@@ -7528,6 +7551,7 @@ func (p *parser) visitFn(fn *ast.Fn, scopeLoc ast.Loc) {
 	p.popScope()
 
 	p.tryBodyCount = oldTryBodyCount
+	p.isThisCaptured = oldIsThisCaptured
 }
 
 func (p *parser) scanForImportPaths(stmts []ast.Stmt, isBundling bool) []ast.Stmt {
@@ -7697,16 +7721,17 @@ type ParseOptions struct {
 
 func newParser(log logging.Log, source logging.Source, options ParseOptions) *parser {
 	p := &parser{
-		log:          log,
-		source:       source,
-		lexer:        lexer.NewLexer(log, source),
-		allowIn:      true,
-		target:       options.Target,
-		ts:           options.TS,
-		jsx:          options.JSX,
-		omitWarnings: options.OmitWarnings,
-		mangleSyntax: options.MangleSyntax,
-		isBundling:   options.IsBundling,
+		log:           log,
+		source:        source,
+		lexer:         lexer.NewLexer(log, source),
+		allowIn:       true,
+		target:        options.Target,
+		ts:            options.TS,
+		jsx:           options.JSX,
+		omitWarnings:  options.OmitWarnings,
+		mangleSyntax:  options.MangleSyntax,
+		isBundling:    options.IsBundling,
+		currentFnOpts: fnOpts{isOutsideFn: true},
 
 		// These are for TypeScript
 		emittedNamespaceVars:      make(map[ast.Ref]bool),
@@ -7857,21 +7882,24 @@ func (p *parser) toAST(source logging.Source, stmts []ast.Stmt, hashbang string)
 	symbols := ast.SymbolMap{make([][]ast.Symbol, source.Index+1)}
 	symbols.Outer[source.Index] = p.symbols
 
-	// Consider this module to have CommonJS exports if the "exports" or "module"
-	// variables were referenced somewhere in the module
-	hasCommonJsExports := symbols.Get(p.exportsRef).UseCountEstimate > 0 ||
+	// The following features cause us to need CommonJS mode:
+	// - Using the "exports" variable
+	// - Using the "module" variable
+	// - Using a top-level return statement
+	usesCommonJSFeatures := p.hasTopLevelReturn ||
+		symbols.Get(p.exportsRef).UseCountEstimate > 0 ||
 		symbols.Get(p.moduleRef).UseCountEstimate > 0
 
 	return ast.AST{
-		ImportPaths:         p.importPaths,
-		IndirectImportItems: p.indirectImportItems,
-		HasCommonJsExports:  hasCommonJsExports,
-		Stmts:               stmts,
-		ModuleScope:         p.moduleScope,
-		Symbols:             &symbols,
-		ExportsRef:          p.exportsRef,
-		RequireRef:          p.requireRef,
-		ModuleRef:           p.moduleRef,
-		Hashbang:            hashbang,
+		ImportPaths:          p.importPaths,
+		IndirectImportItems:  p.indirectImportItems,
+		UsesCommonJSFeatures: usesCommonJSFeatures,
+		Stmts:                stmts,
+		ModuleScope:          p.moduleScope,
+		Symbols:              &symbols,
+		ExportsRef:           p.exportsRef,
+		RequireRef:           p.requireRef,
+		ModuleRef:            p.moduleRef,
+		Hashbang:             hashbang,
 	}
 }

@@ -114,6 +114,33 @@ func ScanBundle(
 		bundleOptions.ExtensionToLoader = DefaultExtensionToLoaderMap()
 	}
 
+	// Always start by parsing the runtime file
+	{
+		source := logging.Source{
+			Index:        runtimeSourceIndex,
+			AbsolutePath: "<runtime>",
+			PrettyPath:   "<runtime>",
+			Contents:     runtime,
+		}
+		sources = append(sources, source)
+		files = append(files, file{})
+		remaining++
+		go func() {
+			runtimeParseOptions := parseOptions
+
+			// Avoid defining extra symbols such as "exports" and "module" in the top-
+			// level scope for the runtime. All other files will be embedded as child
+			// scopes of the runtime scope during bundling. If we defined these extra
+			// symbols, we would then need to rename all identically-named symbols in
+			// all files so everything would be called "exports2" and "module2"
+			// instead, which looks weird.
+			runtimeParseOptions.IsBundling = false
+
+			ast, ok := parser.Parse(log, source, runtimeParseOptions)
+			results <- parseResult{source.Index, ast, ok}
+		}()
+	}
+
 	maybeParseFile := func(path string, importSource logging.Source, pathRange ast.Range, isDisabled bool) (uint32, bool) {
 		sourceIndex, ok := visited[path]
 		if !ok {
@@ -206,20 +233,52 @@ func DefaultExtensionToLoaderMap() map[string]Loader {
 	}
 }
 
+type Format uint8
+
+const (
+	FormatNone Format = iota
+
+	// IIFE stands for immediately-invoked function expression. That looks like
+	// this:
+	//
+	//   (() => {
+	//     ... bundled code ...
+	//     require(entryPoint);
+	//   })();
+	//
+	// If the optional ModuleName is configured, then we'll write out this:
+	//
+	//   let moduleName = (() => {
+	//     ... bundled code ...
+	//     return require(entryPoint);
+	//   })();
+	//
+	FormatIIFE
+
+	// The CommonJS format looks like this:
+	//
+	//   ... bundled code ...
+	//   module.exports = require(entryPoint);
+	//
+	FormatCommonJS
+)
+
 type BundleOptions struct {
 	// true: imports are scanned and bundled along with the file
 	// false: imports are left alone and the file is passed through as-is
 	IsBundling bool
 
-	AbsOutputFile         string
-	AbsOutputDir          string
-	RemoveWhitespace      bool
-	MinifyIdentifiers     bool
-	MangleSyntax          bool
-	SourceMap             bool
-	ModuleName            string
-	ExtensionToLoader     map[string]Loader
-	omitBootstrapForTests bool
+	AbsOutputFile     string
+	AbsOutputDir      string
+	RemoveWhitespace  bool
+	MinifyIdentifiers bool
+	MangleSyntax      bool
+	SourceMap         bool
+	ModuleName        string
+	ExtensionToLoader map[string]Loader
+	OutputFormat      Format
+
+	omitRuntimeForTests bool
 }
 
 type BundleResult struct {
@@ -253,7 +312,15 @@ func (b *Bundle) compileFile(
 	tree := f.ast
 	indent := 0
 	if options.IsBundling {
-		indent = 2
+		if options.OutputFormat == FormatIIFE {
+			indent++
+		}
+		if sourceIndex != runtimeSourceIndex {
+			indent++
+			if !options.omitRuntimeForTests {
+				indent++
+			}
+		}
 	}
 
 	// Remap source indices to make the output deterministic
@@ -265,11 +332,20 @@ func (b *Bundle) compileFile(
 		}
 	}
 
-	result := compileResult{PrintResult: printer.Print(tree, printer.Options{
+	// The printer will be calling runtime functions
+	requireRef, requireOk := b.files[runtimeSourceIndex].ast.ModuleScope.Members["__require"]
+	importRef, importOk := b.files[runtimeSourceIndex].ast.ModuleScope.Members["__import"]
+	if !requireOk || !importOk {
+		panic("Internal error")
+	}
+
+	result := compileResult{PrintResult: printer.Print(tree, printer.PrintOptions{
 		RemoveWhitespace:  options.RemoveWhitespace,
 		SourceMapContents: sourceMapContents,
 		Indent:            indent,
 		ResolvedImports:   remappedResolvedImports,
+		RequireRef:        requireRef,
+		ImportRef:         importRef,
 	})}
 	if options.SourceMap {
 		result.quotedSource = printer.QuoteForJSON(b.sources[sourceIndex].Contents)
@@ -277,84 +353,59 @@ func (b *Bundle) compileFile(
 	return result
 }
 
+// Join the JavaScript files together into a bundle
 func (b *Bundle) generateJavaScriptForEntryPoint(
 	files []file, symbols *ast.SymbolMap, compileResults map[uint32]*compileResult, groups [][]uint32, options *BundleOptions,
-	jsPrefix []byte, entryPoint uint32, jsName string, sourceIndexToOutputIndex []uint32, moduleInfos []moduleInfo,
+	entryPoint uint32, jsName string, sourceIndexToOutputIndex []uint32, moduleInfos []moduleInfo,
 ) (result BundleResult, generatedOffsets map[uint32]lineColumnOffset) {
-	// Join the JavaScript files together into a bundle
 	prevOffset := 0
 	js := []byte{}
-	if options.ModuleName != "" {
-		equals := " = "
-		if options.RemoveWhitespace {
-			equals = "="
-		}
-		js = append(js, ("let " + options.ModuleName + equals)...)
+
+	// Helper variables to make generating minified code easier
+	space := " "
+	indent := "  "
+	newline := "\n"
+	trailingSemicolon := ";"
+	if options.RemoveWhitespace {
+		space = ""
+		indent = ""
+		newline = ""
+		trailingSemicolon = ""
 	}
-	if options.omitBootstrapForTests {
-		js = append(js, "bootstrap({"...)
-	} else {
-		js = append(js, '(')
-		js = append(js, jsPrefix...)
-		js = append(js, ")({"...)
+
+	outerIndent := ""
+	if options.OutputFormat == FormatIIFE {
+		// Optionally allow naming the exports object
+		if options.ModuleName != "" {
+			js = append(js, ("let " + options.ModuleName + space + "=" + space)...)
+		}
+
+		// Start the closure
+		if options.omitRuntimeForTests {
+			js = append(js, "bootstrap({"...)
+		} else {
+			outerIndent = indent
+			js = append(js, ("(()" + space + "=>" + space + "{" + newline)...)
+		}
 	}
 
 	// This is the line and column offset since the previous JavaScript string
 	// or the start of the file if this is the first JavaScript string.
 	generatedOffsets = make(map[uint32]lineColumnOffset)
 
-	for i, group := range groups {
-		rootSourceIndex := group[len(group)-1]
-		tree := files[rootSourceIndex].ast
+	// Append the runtime
+	if !options.omitRuntimeForTests {
+		js = append(js, compileResults[runtimeSourceIndex].JS...)
+	}
 
-		// Append the prefix
-		if i > 0 {
-			if options.RemoveWhitespace {
-				js = append(js, ',')
-			} else {
-				js = append(js, ",\n"...)
-			}
-		}
-		if !options.RemoveWhitespace {
-			js = append(js, "\n  "...)
-		}
-		js = append(js, fmt.Sprintf("%d(", sourceIndexToOutputIndex[rootSourceIndex])...)
-		requireSymbol := symbols.Get(ast.FollowSymbols(symbols, tree.RequireRef))
-		exportsSymbol := symbols.Get(ast.FollowSymbols(symbols, tree.ExportsRef))
-		moduleSymbol := symbols.Get(ast.FollowSymbols(symbols, tree.ModuleRef))
-		if requireSymbol.UseCountEstimate > 0 || exportsSymbol.UseCountEstimate > 0 || moduleSymbol.UseCountEstimate > 0 {
-			js = append(js, requireSymbol.Name...)
-			if exportsSymbol.UseCountEstimate > 0 || moduleSymbol.UseCountEstimate > 0 {
-				if options.RemoveWhitespace {
-					js = append(js, ',')
-				} else {
-					js = append(js, ", "...)
-				}
-				js = append(js, exportsSymbol.Name...)
-				if moduleSymbol.UseCountEstimate > 0 {
-					if options.RemoveWhitespace {
-						js = append(js, ',')
-					} else {
-						js = append(js, ", "...)
-					}
-					js = append(js, moduleSymbol.Name...)
-				}
-			}
-		}
-		if options.RemoveWhitespace {
-			js = append(js, "){"...)
-		} else {
-			js = append(js, ") {\n"...)
-		}
-
-		// Append the modules in this group
-		for j, sourceIndex := range group {
+	appendGroup := func(group []uint32) {
+		for i, sourceIndex := range group {
 			// Append the prefix
 			if !options.RemoveWhitespace {
-				if j > 0 {
+				if i > 0 {
 					js = append(js, '\n')
 				}
-				js = append(js, fmt.Sprintf("    // %s\n", b.sources[sourceIndex].PrettyPath)...)
+				js = append(js, (outerIndent + indent + indent + "// " + b.sources[sourceIndex].PrettyPath + "\n")...)
 			}
 
 			// If we're an internal non-root module in this group and our exports are
@@ -370,41 +421,83 @@ func (b *Bundle) generateJavaScriptForEntryPoint(
 			// and "deluxelib.js", and "deluxelib.js" imports "simplelib.js". This
 			// means "simplelib.js" is both a root module for its own entry point
 			// and a non-root module for the entry point of "deluxelib.js".
-			if sourceIndex != rootSourceIndex && moduleInfos[sourceIndex].isExportsUsed() {
+			if i != len(group)-1 && moduleInfos[sourceIndex].isExportsUsed() {
 				name := symbols.Get(ast.FollowSymbols(symbols, files[sourceIndex].ast.ExportsRef)).Name
-				if options.RemoveWhitespace {
-					js = append(js, fmt.Sprintf("var %s={};", name)...)
-				} else {
-					js = append(js, fmt.Sprintf("    var %s = {};\n", name)...)
-				}
+				js = append(js, (outerIndent + indent + indent + "var " + name + space + "=" + space + "{};" + newline)...)
 			}
 
 			// Save the offset to the start of the stored JavaScript
 			generatedOffsets[sourceIndex] = computeLineColumnOffset(js[prevOffset:])
 
 			// Append the stored JavaScript
-			if j+1 == len(group) {
+			if i+1 == len(group) {
 				js = append(js, compileResults[sourceIndex].JSWithoutTrailingSemicolon...)
 			} else {
 				js = append(js, compileResults[sourceIndex].JS...)
 			}
 			prevOffset = len(js)
 		}
+	}
 
-		// Append the suffix
-		if options.RemoveWhitespace {
-			js = append(js, '}')
-		} else {
-			js = append(js, "  }"...)
+	if !options.omitRuntimeForTests {
+		commonjsRef, ok := files[runtimeSourceIndex].ast.ModuleScope.Members["__commonjs"]
+		if !ok {
+			panic("Internal error")
 		}
+		js = append(js, (outerIndent + symbols.Get(commonjsRef).Name + space + "=" + space + "{")...)
 	}
 
-	// Append the suffix
-	if options.RemoveWhitespace {
-		js = append(js, fmt.Sprintf("},%d);\n", sourceIndexToOutputIndex[entryPoint])...)
-	} else {
-		js = append(js, fmt.Sprintf("\n}, %d);\n", sourceIndexToOutputIndex[entryPoint])...)
+	for i, group := range groups {
+		rootSourceIndex := group[len(group)-1]
+		tree := files[rootSourceIndex].ast
+
+		// Append the prefix
+		if i > 0 {
+			js = append(js, ("," + newline)...)
+		}
+		js = append(js, (newline + outerIndent + indent)...)
+		js = append(js, fmt.Sprintf("%d(", sourceIndexToOutputIndex[rootSourceIndex])...)
+		exportsSymbol := symbols.Get(ast.FollowSymbols(symbols, tree.ExportsRef))
+		moduleSymbol := symbols.Get(ast.FollowSymbols(symbols, tree.ModuleRef))
+		if exportsSymbol.UseCountEstimate > 0 || moduleSymbol.UseCountEstimate > 0 {
+			js = append(js, exportsSymbol.Name...)
+			if moduleSymbol.UseCountEstimate > 0 {
+				js = append(js, ("," + space + moduleSymbol.Name)...)
+			}
+		}
+		js = append(js, (")" + space + "{" + newline)...)
+		appendGroup(group)
+		js = append(js, (outerIndent + indent + "}")...)
 	}
+
+	// Require the entry point at the end
+	requireRef, ok := files[runtimeSourceIndex].ast.ModuleScope.Members["__require"]
+	if !ok {
+		panic("Internal error")
+	}
+	switch options.OutputFormat {
+	case FormatIIFE:
+		// End the closure
+		if options.omitRuntimeForTests {
+			if options.RemoveWhitespace {
+				js = append(js, fmt.Sprintf("},%d);", sourceIndexToOutputIndex[entryPoint])...)
+			} else {
+				js = append(js, fmt.Sprintf("\n}, %d);", sourceIndexToOutputIndex[entryPoint])...)
+			}
+		} else {
+			js = append(js, (newline + outerIndent + "};" + newline)...)
+			js = append(js, fmt.Sprintf(outerIndent+"return "+symbols.Get(requireRef).Name+"(%d)"+trailingSemicolon+newline,
+				sourceIndexToOutputIndex[entryPoint])...)
+			js = append(js, "})();"...)
+		}
+
+	case FormatCommonJS:
+		js = append(js, (newline + outerIndent + "};" + newline)...)
+		js = append(js, fmt.Sprintf(outerIndent+"module.exports"+space+"="+space+
+			symbols.Get(requireRef).Name+"(%d);",
+			sourceIndexToOutputIndex[entryPoint])...)
+	}
+	js = append(js, '\n')
 
 	result = BundleResult{
 		JsAbsPath:  b.outputPathForEntryPoint(entryPoint, jsName, options),
@@ -626,6 +719,7 @@ func includeDecls(decls []ast.Decl, symbols *ast.SymbolMap, exports map[string]a
 func (b *Bundle) extractImportsAndExports(
 	log logging.Log, files []file, symbols *ast.SymbolMap, sourceIndex uint32,
 	moduleInfos []moduleInfo, namespaceImportMap map[ast.Ref]ast.ENamespaceImport,
+	options *BundleOptions,
 ) {
 	file := &files[sourceIndex]
 	meta := &moduleInfos[sourceIndex]
@@ -636,13 +730,9 @@ func (b *Bundle) extractImportsAndExports(
 		indirectImportItems[ref] = true
 	}
 
-	// Reserve two statements, one for imports and one for exports. We reserve
-	// these now for two reasons: a) we don't want to reallocate later and b)
-	// we don't want to have to shift all statements over by one to prepend
-	// an import or export statement.
-	stmtStart := 2
-	stmts := make([]ast.Stmt, stmtStart, len(file.ast.Stmts)+stmtStart)
 	importDecls := []ast.Decl{}
+	stmts := file.ast.Stmts
+	stmtCount := 0
 
 	// Certain import and export statements need to generate require() calls
 	addRequireCall := func(loc ast.Loc, ref ast.Ref, path ast.Path) {
@@ -650,10 +740,9 @@ func (b *Bundle) extractImportsAndExports(
 			ast.Binding{loc, &ast.BIdentifier{ref}},
 			&ast.Expr{path.Loc, &ast.ERequire{Path: path, IsES6Import: true}},
 		})
-		symbols.IncrementUseCountEstimate(file.ast.RequireRef)
 	}
 
-	for _, stmt := range file.ast.Stmts {
+	for _, stmt := range stmts {
 		switch s := stmt.Data.(type) {
 		case *ast.SImport:
 			otherSourceIndex, ok := file.resolvedImports[s.Path.Text]
@@ -824,21 +913,50 @@ func (b *Bundle) extractImportsAndExports(
 			}
 		}
 
-		stmts = append(stmts, stmt)
+		// Filter the statement array in place to save some allocations
+		stmts[stmtCount] = stmt
+		stmtCount++
 	}
 
-	// Prepend imports if there are any
+	// Finish the filter operation by discarding unused slots
+	stmts = stmts[:stmtCount]
+
+	// Reserve some more slots for any import statements we will generate
 	if len(importDecls) > 0 {
-		stmtStart--
-		stmts[stmtStart] = ast.Stmt{ast.Loc{}, &ast.SLocal{Kind: ast.LocalConst, Decls: importDecls}}
+		if options.MangleSyntax {
+			stmtCount++
+		} else {
+			stmtCount += len(importDecls)
+		}
 	}
 
-	// Reserve a slot at the beginning for our exports, which will be used or
-	// discarded by our caller
-	stmtStart--
+	// Preallocate a buffer to use for the final statement array. Make sure to
+	// include enough room for all remaining statements as well as any import
+	// statements we need to generate.
+	//
+	// Reserve an extra slot at the beginning for our exports, which will be used
+	// or discarded by our caller. This extra slot helps avoid another O(n)
+	// reallocation just to prepend the export statement.
+	finalStmts := make([]ast.Stmt, 1, stmtCount+1)
+
+	// Start off with imports if there are any
+	if len(importDecls) > 0 {
+		if options.MangleSyntax {
+			finalStmts = append(finalStmts, ast.Stmt{ast.Loc{},
+				&ast.SLocal{Kind: ast.LocalConst, Decls: importDecls}})
+		} else {
+			for _, decl := range importDecls {
+				finalStmts = append(finalStmts, ast.Stmt{decl.Binding.Loc,
+					&ast.SLocal{Kind: ast.LocalConst, Decls: []ast.Decl{decl}}})
+			}
+		}
+	}
+
+	// Then add all remaining statements
+	finalStmts = append(finalStmts, stmts...)
 
 	// Update the file
-	file.ast.Stmts = stmts[stmtStart:]
+	file.ast.Stmts = finalStmts
 	file.ast.IndirectImportItems = indirectImportItems
 }
 
@@ -866,7 +984,8 @@ func addExportStar(moduleInfos []moduleInfo, visited map[uint32]bool, sourceInde
 }
 
 func (b *Bundle) bindImportsAndExports(
-	log logging.Log, files []file, symbols *ast.SymbolMap, group []uint32, moduleInfos []moduleInfo,
+	log logging.Log, files []file, symbols *ast.SymbolMap, group []uint32,
+	moduleInfos []moduleInfo, options *BundleOptions,
 ) {
 	// Track any imports that may be re-exported
 	namespaceImportMap := make(map[ast.Ref]ast.ENamespaceImport)
@@ -878,7 +997,7 @@ func (b *Bundle) bindImportsAndExports(
 
 	// Scan for information about imports and exports
 	for _, sourceIndex := range group {
-		b.extractImportsAndExports(log, files, symbols, sourceIndex, moduleInfos, namespaceImportMap)
+		b.extractImportsAndExports(log, files, symbols, sourceIndex, moduleInfos, namespaceImportMap, options)
 	}
 
 	// Process "export *" statements
@@ -969,14 +1088,17 @@ func (b *Bundle) bindImportsAndExports(
 		}
 
 		// Use the export slot
+		exportRef, ok := b.files[runtimeSourceIndex].ast.ModuleScope.Members["__export"]
+		if !ok {
+			panic("Internal error")
+		}
 		stmts[0] = ast.Stmt{ast.Loc{}, &ast.SExpr{ast.Expr{ast.Loc{}, &ast.ECall{
-			Target: ast.Expr{ast.Loc{}, &ast.EIdentifier{file.ast.RequireRef}},
+			Target: ast.Expr{ast.Loc{}, &ast.EIdentifier{exportRef}},
 			Args: []ast.Expr{
 				ast.Expr{ast.Loc{}, &ast.EIdentifier{file.ast.ExportsRef}},
 				ast.Expr{ast.Loc{}, &ast.EObject{properties}},
 			},
 		}}}}
-		symbols.IncrementUseCountEstimate(file.ast.RequireRef)
 		symbols.IncrementUseCountEstimate(file.ast.ExportsRef)
 		file.ast.Stmts = stmts
 	}
@@ -1041,25 +1163,33 @@ func (b *Bundle) markExportsAsUnbound(f file, symbols *ast.SymbolMap) {
 	}
 }
 
+func (b *Bundle) renameOrMinifyAllSymbolsInRuntime(files []file, symbols *ast.SymbolMap, options *BundleOptions) {
+	// Operate on all module-level scopes in all files
+	moduleScopes := make([]*ast.Scope, len(files))
+	for sourceIndex, _ := range files {
+		moduleScopes[sourceIndex] = files[sourceIndex].ast.ModuleScope
+	}
+
+	// Avoid collisions with any unbound symbols in any file
+	reservedNames := computeReservedNames(moduleScopes, symbols)
+
+	// We're only renaming symbols in the runtime
+	runtimeModuleScope := []*ast.Scope{files[runtimeSourceIndex].ast.ModuleScope}
+
+	if options.MinifyIdentifiers {
+		nextName := 54 * 54 // Use names ending with '$' to avoid taking good short names
+		minifyAllSymbols(reservedNames, runtimeModuleScope, symbols, nextName)
+	} else {
+		renameAllSymbols(reservedNames, runtimeModuleScope, symbols)
+	}
+}
+
 // Ensures all symbol names are valid non-colliding identifiers
 func (b *Bundle) renameOrMinifyAllSymbols(files []file, symbols *ast.SymbolMap, group []uint32, options *BundleOptions) {
+	// Operate on all module-level scopes in this module group
 	moduleScopes := make([]*ast.Scope, len(group))
 	for i, sourceIndex := range group {
 		moduleScopes[i] = files[sourceIndex].ast.ModuleScope
-	}
-
-	// Merge all "require" symbols together. This is necessary for correctness
-	// because all modules in the same group will be joined together in the same
-	// scope later on in the compilation pipeline.
-	//
-	// We don't need to worry about the "exports" and "module" symbols since any
-	// use of those would cause the module using them to be flagged as a CommonJS
-	// module and put into its own group without any other modules. In fact, it'd
-	// be bad if we merged "exports" symbols together because each one may be
-	// used for "import * as ns from 'foo'" statements and different modules in
-	// the same group need to be distinct from one another.
-	for _, sourceIndex := range group[1:] {
-		ast.MergeSymbols(symbols, files[sourceIndex].ast.RequireRef, files[group[0]].ast.RequireRef)
 	}
 
 	// Rename all internal "exports" symbols to something more helpful. These
@@ -1072,10 +1202,23 @@ func (b *Bundle) renameOrMinifyAllSymbols(files []file, symbols *ast.SymbolMap, 
 		symbols.Set(ref, symbol)
 	}
 
+	// Avoid collisions with any unbound symbols in this module group
+	reservedNames := computeReservedNames(moduleScopes, symbols)
+	if options.IsBundling {
+		// These are used to implement bundling, and need to be free for use
+		reservedNames["require"] = true
+		reservedNames["Promise"] = true
+
+		// Avoid collisions with symbols in the runtime's top-level scope
+		for _, ref := range files[runtimeSourceIndex].ast.ModuleScope.Members {
+			reservedNames[symbols.Get(ref).Name] = true
+		}
+	}
+
 	if options.MinifyIdentifiers {
-		minifyAllSymbols(moduleScopes, symbols)
+		minifyAllSymbols(reservedNames, moduleScopes, symbols, 0 /* nextName */)
 	} else {
-		renameAllSymbols(moduleScopes, symbols)
+		renameAllSymbols(reservedNames, moduleScopes, symbols)
 	}
 }
 
@@ -1096,8 +1239,8 @@ func (b *Bundle) computeModuleGroups(
 		// Every module starts off in its own group
 		infos[sourceIndex].groupLabel = uint32(sourceIndex)
 
-		// A module is CommonJS if it contains CommonJS exports
-		if f.ast.HasCommonJsExports {
+		// A module is CommonJS if it uses CommonJS features
+		if f.ast.UsesCommonJSFeatures {
 			infos[sourceIndex].isCommonJs = true
 		}
 
@@ -1187,10 +1330,14 @@ func (b *Bundle) Compile(log logging.Log, options BundleOptions) []BundleResult 
 		options.ExtensionToLoader = DefaultExtensionToLoaderMap()
 	}
 
+	if options.OutputFormat == FormatNone {
+		options.OutputFormat = FormatIIFE
+	}
+
 	if options.IsBundling {
-		return b.compileBundle(log, options)
+		return b.compileBundle(log, &options)
 	} else {
-		return b.compileIndependent(log, options)
+		return b.compileIndependent(log, &options)
 	}
 }
 
@@ -1202,7 +1349,7 @@ func (b *Bundle) checkOverwrite(log logging.Log, sourceIndex uint32, path string
 	}
 }
 
-func (b *Bundle) compileIndependent(log logging.Log, options BundleOptions) []BundleResult {
+func (b *Bundle) compileIndependent(log logging.Log, options *BundleOptions) []BundleResult {
 	// When spawning a new goroutine, make sure to manually forward all variables
 	// that are different for every iteration of the loop. Otherwise each
 	// goroutine will share the same copy of the closed-over variables and cause
@@ -1215,6 +1362,12 @@ func (b *Bundle) compileIndependent(log logging.Log, options BundleOptions) []Bu
 	for sourceIndex, _ := range files {
 		waitGroup.Add(1)
 		go func(sourceIndex uint32) {
+			// Don't emit the runtime to a file
+			if sourceIndex == runtimeSourceIndex {
+				waitGroup.Done()
+				return
+			}
+
 			group := []uint32{sourceIndex}
 
 			// Make sure we don't rename exports
@@ -1222,18 +1375,18 @@ func (b *Bundle) compileIndependent(log logging.Log, options BundleOptions) []Bu
 			b.markExportsAsUnbound(files[sourceIndex], symbols)
 
 			// Rename symbols
-			b.renameOrMinifyAllSymbols(files, symbols, group, &options)
+			b.renameOrMinifyAllSymbols(files, symbols, group, options)
 			files[sourceIndex].ast.Symbols = symbols
 
 			// Print the JavaScript code
-			result := b.compileFile(&options, sourceIndex, files[sourceIndex], []uint32{})
+			result := b.compileFile(options, sourceIndex, files[sourceIndex], []uint32{})
 
 			// Make a filename for the resulting JavaScript file
-			jsName := b.outputFileForEntryPoint(sourceIndex, &options)
+			jsName := b.outputFileForEntryPoint(sourceIndex, options)
 
 			// Generate the resulting JavaScript file
 			item := &results[sourceIndex]
-			item.JsAbsPath = b.outputPathForEntryPoint(sourceIndex, jsName, &options)
+			item.JsAbsPath = b.outputPathForEntryPoint(sourceIndex, jsName, options)
 			item.JsContents = addTrailing(result.JS, '\n')
 
 			// Optionally also generate a source map
@@ -1241,7 +1394,7 @@ func (b *Bundle) compileIndependent(log logging.Log, options BundleOptions) []Bu
 				compileResults := map[uint32]*compileResult{sourceIndex: &result}
 				generatedOffsets := map[uint32]lineColumnOffset{sourceIndex: lineColumnOffset{}}
 				groups := [][]uint32{group}
-				b.generateSourceMapForEntryPoint(compileResults, generatedOffsets, groups, &options, item)
+				b.generateSourceMapForEntryPoint(compileResults, generatedOffsets, groups, options, item)
 			}
 
 			// Refuse to overwrite the input file
@@ -1254,10 +1407,11 @@ func (b *Bundle) compileIndependent(log logging.Log, options BundleOptions) []Bu
 	// Wait for all jobs to finish
 	waitGroup.Wait()
 
-	return results
+	// Skip over the slot for the runtime, which was never filled out
+	return results[1:]
 }
 
-func (b *Bundle) compileBundle(log logging.Log, options BundleOptions) []BundleResult {
+func (b *Bundle) compileBundle(log logging.Log, options *BundleOptions) []BundleResult {
 	// Make a shallow copy of all files in the bundle so we don't mutate the bundle
 	files := append([]file{}, b.files...)
 
@@ -1265,6 +1419,18 @@ func (b *Bundle) compileBundle(log logging.Log, options BundleOptions) []BundleR
 	sourceIndexToOutputIndex, outputIndexToSourceIndex := b.computeDeterministicRemapping()
 	moduleInfos, moduleGroups := b.computeModuleGroups(
 		files, sourceIndexToOutputIndex, outputIndexToSourceIndex)
+
+	// Rename or minify symbols in the runtime first before renaming or minifying
+	// symbols for any other file. All other files will be embedded as a child
+	// scope of the runtime, so we need to obey the following constraints:
+	//
+	//   1. Symbols in the runtime must not be the same name as an unbound symbol
+	//      in any other file.
+	//
+	//   2. Symbols in any other file must not be the same name as any top-level
+	//      symbol in the runtime.
+	//
+	b.renameOrMinifyAllSymbolsInRuntime(files, symbols, options)
 
 	// When spawning a new goroutine, make sure to manually forward all variables
 	// that are different for every iteration of the loop. Otherwise each
@@ -1279,8 +1445,11 @@ func (b *Bundle) compileBundle(log logging.Log, options BundleOptions) []BundleR
 			// It's important to wait to rename symbols until after imports and
 			// exports have been handled. Exports need to use the original un-renamed
 			// names of the symbols.
-			b.bindImportsAndExports(log, files, symbols, group, moduleInfos)
-			b.renameOrMinifyAllSymbols(files, symbols, group, &options)
+			isRuntime := len(group) == 1 && group[0] == runtimeSourceIndex
+			if !isRuntime {
+				b.bindImportsAndExports(log, files, symbols, group, moduleInfos, options)
+				b.renameOrMinifyAllSymbols(files, symbols, group, options)
+			}
 			importExportGroup.Done()
 		}(group)
 	}
@@ -1302,13 +1471,10 @@ func (b *Bundle) compileBundle(log logging.Log, options BundleOptions) []BundleR
 		compileGroup.Add(1)
 		go func(sourceIndex uint32, result *compileResult) {
 			file := files[sourceIndex]
-			*result = b.compileFile(&options, sourceIndex, file, sourceIndexToOutputIndex)
+			*result = b.compileFile(options, sourceIndex, file, sourceIndexToOutputIndex)
 			compileGroup.Done()
 		}(uint32(sourceIndex), result)
 	}
-
-	// All bundles use the same bootstrap prefix
-	jsPrefix := generateBootstrapPrefix(&options)
 
 	// Wait for all compile jobs to finish
 	compileGroup.Wait()
@@ -1323,16 +1489,16 @@ func (b *Bundle) compileBundle(log logging.Log, options BundleOptions) []BundleR
 			groups := b.deterministicDependenciesOfEntryPoint(files, entryPoint, moduleInfos)
 
 			// Make a filename for the resulting JavaScript file
-			jsName := b.outputFileForEntryPoint(entryPoint, &options)
+			jsName := b.outputFileForEntryPoint(entryPoint, options)
 
 			// Generate the resulting JavaScript file
 			item, generatedOffsets := b.generateJavaScriptForEntryPoint(
-				files, symbols, compileResults, groups, &options, jsPrefix,
+				files, symbols, compileResults, groups, options,
 				entryPoint, jsName, sourceIndexToOutputIndex, moduleInfos)
 
 			// Optionally also generate a source map
 			if options.SourceMap {
-				b.generateSourceMapForEntryPoint(compileResults, generatedOffsets, groups, &options, &item)
+				b.generateSourceMapForEntryPoint(compileResults, generatedOffsets, groups, options, &item)
 			}
 
 			// Refuse to overwrite the input file
@@ -1461,109 +1627,41 @@ func removeTrailing(x []byte, c byte) []byte {
 	return x
 }
 
-func generateBootstrapPrefix(options *BundleOptions) []byte {
-	// The require() function serves a few independent purposes:
-	//
-	//   // Import an exports object from another module. If "isES6Import" is
-	//   // truthy and the module referenced by "sourceIndex" is a CommonJS
-	//   // module, a conversion is done to correct for "default" exports.
-	//   require(sourceIndex: number, isES6Import?: boolean): ExportsObject;
-	//
-	//   // Add properties to an exports object. These are added as ES6 getters
-	//   // so the bindings are live and can't be overwritten.
-	//   require(exports: ExportsObject, getters: {[name: string]: () => any}): void;
-	//
-	// It's overloaded like this to make the code slightly smaller as well as to
-	// prevent the module from being able to mess with the export mechanism
-	// (since the "require" symbol is special-cased by the parser).
-	bootstrap := `
-		((modules, entryPoint) => {
-			let global = function() { return this }()
-			let cache = {}
+const runtimeSourceIndex = 0
+const runtime = `
+	let __defineProperty = Object.defineProperty
 
-			let esbuildRequire = (target, arg) => {
-				let type = typeof target;
+	// This holds the exports for all modules that have been evaluated
+	let __modules = {}
 
-				// If the first argument is a string, this is an external require
-				if (type === 'string') {
-					return require(target)
-				}
-
-				// If the first argument is a number, this is an import
-				if (type === 'number') {
-					let module = cache[target], exports
-
-					// Evaluate the module if needed
-					if (!module) {
-						module = cache[target] = {exports: {}}
-						modules[target].call(global, esbuildRequire, module.exports, module)
-					}
-
-					// Return the exports object off the module in case it was overwritten
-					exports = module.exports
-
-					// Convert CommonJS exports to ES6 exports
-					if (arg && (!exports || !exports.__esModule)) {
-						if (!exports || (typeof exports !== 'object' && typeof exports !== 'function')) {
-							exports = {}
-						}
-						if (!('default' in exports)) {
-							Object.defineProperty(exports, 'default', {
-								get: () => module.exports,
-								enumerable: true,
-							})
-						}
-					}
-
-					return exports
-				}
-
-				// Mark this module as an ES6 module using a non-enumerable property
-				Object.defineProperty(target, '__esModule', {
-					value: true,
-				})
-
-				for (let name in arg) {
-					Object.defineProperty(target, name, {
-						get: arg[name],
-						enumerable: true,
-					})
-				}
-			}
-
-			return esbuildRequire(entryPoint)
-		})
-	`
-
-	// Parse the bootstrap code
-	log := logging.Log{}
-	source := logging.Source{
-		Index:        0,
-		AbsolutePath: "",
-		PrettyPath:   "",
-		Contents:     bootstrap,
-	}
-	result, ok := parser.Parse(log, source, parser.ParseOptions{
-		MangleSyntax:         options.MangleSyntax,
-		KeepSingleExpression: true,
-	})
-	if !ok {
-		panic("Internal error")
+	let __require = (id, module) => {
+		module = __modules[id]
+		if (!module) {
+			module = __modules[id] = {exports: {}}
+			__commonjs[id](module.exports, module)
+		}
+		return module.exports
 	}
 
-	// Optionally minify the symbol names
-	if options.MinifyIdentifiers {
-		minifyAllSymbols([]*ast.Scope{result.ModuleScope}, result.Symbols)
+	let __import = (module, exports) => {
+		module = __require(module)
+		if (module && module.__esModule) {
+			return module
+		}
+		exports = Object(module)
+		if (!('default' in exports)) {
+			__defineProperty(exports, 'default', { value: module, enumerable: true })
+		}
+		return exports
 	}
 
-	// Print the bootstrap code
-	stmt, ok := result.Stmts[0].Data.(*ast.SExpr)
-	if !ok {
-		panic("Internal error")
+	let __export = (target, all) => {
+		__defineProperty(target, '__esModule', { value: true })
+		for (let name in all) {
+			__defineProperty(target, name, { get: all[name], enumerable: true })
+		}
 	}
-	return printer.PrintExpr(stmt.Value, result.Symbols, result.RequireRef, printer.Options{
-		RemoveWhitespace:  options.RemoveWhitespace,
-		SourceMapContents: nil,
-		Indent:            0,
-	}).JS
-}
+
+	// This will be filled in with the CommonJS module map
+	let __commonjs
+`

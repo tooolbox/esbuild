@@ -396,7 +396,8 @@ type printer struct {
 	// For imports
 	resolvedImports     map[string]uint32
 	indirectImportItems map[ast.Ref]bool
-	requireRef          ast.Ref
+	requireRef          ast.Ref // For CommonJS imports
+	importRef           ast.Ref // For ES6 imports
 
 	// For source maps
 	writeSourceMap bool
@@ -884,6 +885,34 @@ func (p *printer) bestQuoteCharForString(data []uint16, allowBacktick bool) stri
 	return c
 }
 
+func (p *printer) printRequireCall(path string, isES6Import bool) {
+	ref := p.requireRef
+	if isES6Import {
+		ref = p.importRef
+	}
+
+	if p.resolvedImports != nil {
+		// If we're bundling require calls, convert the string to a source index
+		if sourceIndex, ok := p.resolvedImports[path]; ok {
+			p.printSymbol(ref)
+			p.print(fmt.Sprintf("(%d", sourceIndex))
+			if !p.minify {
+				p.print(fmt.Sprintf(" /* %s */", path))
+			}
+		} else {
+			// If we get here, the module was marked as an external module
+			p.print("require(")
+			p.print(Quote(path))
+		}
+	} else {
+		p.printSymbol(ref)
+		p.print("(")
+		p.print(Quote(path))
+	}
+
+	p.print(")")
+}
+
 const (
 	forbidCall = 1 << iota
 	forbidIn
@@ -980,36 +1009,7 @@ func (p *printer) printExpr(expr ast.Expr, level ast.L, flags int) {
 		if wrap {
 			p.print("(")
 		}
-		p.printSymbol(p.requireRef)
-		p.print("(")
-		if p.resolvedImports != nil {
-			// If we're bundling require calls, convert the string to a source index
-			if sourceIndex, ok := p.resolvedImports[e.Path.Text]; ok {
-				p.print(fmt.Sprintf("%d", sourceIndex))
-				if !p.minify {
-					p.print(fmt.Sprintf(" /* %s */", e.Path.Text))
-				}
-			} else {
-				// If we get here, the module was marked as an external module
-				p.print(Quote(e.Path.Text))
-			}
-		} else {
-			p.print(Quote(e.Path.Text))
-		}
-
-		// If this require() call used to be an ES6 import, let the bootstrap code
-		// know so it can convert the default export format from CommonJS to ES6
-		if e.IsES6Import {
-			p.print(",")
-			p.printSpace()
-			if p.minify {
-				p.print("1")
-			} else {
-				p.print("true /* ES6 import */")
-			}
-		}
-
-		p.print(")")
+		p.printRequireCall(e.Path.Text, e.IsES6Import)
 		if wrap {
 			p.print(")")
 		}
@@ -1021,26 +1021,18 @@ func (p *printer) printExpr(expr ast.Expr, level ast.L, flags int) {
 		}
 		p.printSpaceBeforeIdentifier()
 		if s, ok := e.Expr.Data.(*ast.EString); ok && p.resolvedImports != nil {
-			// If we're bundling require calls, convert the string to a source index
 			path := lexer.UTF16ToString(s.Value)
-			sourceIndex, ok := p.resolvedImports[path]
-			if !ok {
-				panic("Internal error")
-			}
 			if p.minify {
 				p.print("Promise.resolve().then(()=>")
-				p.printSymbol(p.requireRef)
-				p.print(fmt.Sprintf("(%d))", sourceIndex))
 			} else {
 				p.print("Promise.resolve().then(() => ")
-				p.printSymbol(p.requireRef)
-				p.print(fmt.Sprintf("(%d /* %s */))", sourceIndex, path))
 			}
+			p.printRequireCall(path, true)
 		} else {
 			p.print("import(")
 			p.printExpr(e.Expr, ast.LComma, 0)
-			p.print(")")
 		}
+		p.print(")")
 		if wrap {
 			p.print(")")
 		}
@@ -2140,11 +2132,13 @@ func (p *printer) printStmt(stmt ast.Stmt) {
 	}
 }
 
-type Options struct {
+type PrintOptions struct {
 	RemoveWhitespace  bool
 	SourceMapContents *string
 	Indent            int
 	ResolvedImports   map[string]uint32
+	RequireRef        ast.Ref
+	ImportRef         ast.Ref
 }
 
 type SourceMapChunk struct {
@@ -2163,8 +2157,7 @@ type SourceMapChunk struct {
 func createPrinter(
 	symbols *ast.SymbolMap,
 	indirectImportItems map[ast.Ref]bool,
-	requireRef ast.Ref,
-	options Options,
+	options PrintOptions,
 ) *printer {
 	p := &printer{
 		symbols:             symbols,
@@ -2180,7 +2173,8 @@ func createPrinter(
 		prevNumEnd:          -1,
 		prevRegExpEnd:       -1,
 		prevLoc:             ast.Loc{-1},
-		requireRef:          requireRef,
+		requireRef:          options.RequireRef,
+		importRef:           options.ImportRef,
 	}
 
 	// If we're writing out a source map, prepare a table of line start indices
@@ -2223,9 +2217,8 @@ type PrintResult struct {
 	SourceMapChunk SourceMapChunk
 }
 
-func Print(tree ast.AST, options Options) PrintResult {
-	p := createPrinter(tree.Symbols, tree.IndirectImportItems, tree.RequireRef, options)
-	p.requireRef = tree.RequireRef
+func Print(tree ast.AST, options PrintOptions) PrintResult {
+	p := createPrinter(tree.Symbols, tree.IndirectImportItems, options)
 
 	// Always add a mapping at the beginning of the file
 	p.addSourceMapping(ast.Loc{0})
@@ -2254,8 +2247,8 @@ func Print(tree ast.AST, options Options) PrintResult {
 	}
 }
 
-func PrintExpr(expr ast.Expr, symbols *ast.SymbolMap, requireRef ast.Ref, options Options) PrintResult {
-	p := createPrinter(symbols, make(map[ast.Ref]bool), requireRef, options)
+func PrintExpr(expr ast.Expr, symbols *ast.SymbolMap, options PrintOptions) PrintResult {
+	p := createPrinter(symbols, make(map[ast.Ref]bool), options)
 
 	// Always add a mapping at the beginning of the file
 	p.addSourceMapping(ast.Loc{0})

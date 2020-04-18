@@ -8,7 +8,7 @@ import (
 	"github.com/tooolbox/esbuild/src/esbuild/lexer"
 )
 
-func reservedNames(moduleScopes []*ast.Scope, symbols *ast.SymbolMap) map[string]bool {
+func computeReservedNames(moduleScopes []*ast.Scope, symbols *ast.SymbolMap) map[string]bool {
 	names := make(map[string]bool)
 
 	// All keywords are reserved names
@@ -75,8 +75,8 @@ func (r *renamer) findUnusedName(prefix string) string {
 	}
 }
 
-func renameAllSymbols(moduleScopes []*ast.Scope, symbols *ast.SymbolMap) {
-	r := &renamer{nil, reservedNames(moduleScopes, symbols)}
+func renameAllSymbols(reservedNames map[string]bool, moduleScopes []*ast.Scope, symbols *ast.SymbolMap) {
+	r := &renamer{nil, reservedNames}
 	alreadyRenamed := make(map[ast.Ref]bool)
 
 	// Rename top-level symbols across all files all at once since after
@@ -132,7 +132,7 @@ func (parent *renamer) renameAllSymbolsRecursive(scope *ast.Scope, symbols *ast.
 ////////////////////////////////////////////////////////////////////////////////
 // minifyAllSymbols() implementation
 
-func minifyAllSymbols(moduleScopes []*ast.Scope, symbols *ast.SymbolMap) {
+func minifyAllSymbols(reservedNames map[string]bool, moduleScopes []*ast.Scope, symbols *ast.SymbolMap, nextName int) {
 	g := minifyGroup{[]uint32{}, make(map[ast.Ref]uint32)}
 	var next uint32 = 0
 
@@ -166,12 +166,9 @@ func minifyAllSymbols(moduleScopes []*ast.Scope, symbols *ast.SymbolMap) {
 	}
 	sort.Sort(sorted)
 
-	reservedNames := reservedNames(moduleScopes, symbols)
-	names := make([]string, len(sorted))
-	nextName := 0
-
 	// Assign names sequentially in order so the most frequent symbols get the
 	// shortest names
+	names := make([]string, len(sorted))
 	for _, slot := range sorted {
 		name := lexer.NumberToMinifiedName(nextName)
 		nextName++

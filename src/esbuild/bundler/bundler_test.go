@@ -61,7 +61,7 @@ func expectBundled(t *testing.T, args bundled) {
 		}
 
 		log, join = logging.NewDeferLog()
-		args.bundleOptions.omitBootstrapForTests = true
+		args.bundleOptions.omitRuntimeForTests = true
 		if args.bundleOptions.AbsOutputFile != "" {
 			args.bundleOptions.AbsOutputDir = path.Dir(args.bundleOptions.AbsOutputFile)
 		}
@@ -102,10 +102,11 @@ func TestSimpleES6(t *testing.T) {
 		},
 		bundleOptions: BundleOptions{
 			IsBundling:    true,
+			ModuleName:    "testModule",
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
-			"/out.js": `bootstrap({
+			"/out.js": `let testModule = bootstrap({
   0() {
     // /foo.js
     function fn() {
@@ -140,20 +141,21 @@ func TestSimpleCommonJS(t *testing.T) {
 		},
 		bundleOptions: BundleOptions{
 			IsBundling:    true,
+			ModuleName:    "testModule",
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
-			"/out.js": `bootstrap({
-  1(require, exports, module) {
+			"/out.js": `let testModule = bootstrap({
+  1(exports, module) {
     // /foo.js
     module.exports = function() {
       return 123;
     };
   },
 
-  0(require) {
+  0() {
     // /entry.js
-    const fn = require(1 /* ./foo */);
+    const fn = __require(1 /* ./foo */);
     console.log(fn());
   }
 }, 0);
@@ -191,17 +193,17 @@ func TestNestedCommonJS(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  1(require, exports, module) {
+  1(exports, module) {
     // /foo.js
     module.exports = function() {
       return 123;
     };
   },
 
-  0(require) {
+  0() {
     // /entry.js
     function nestedScope() {
-      const fn = require(1 /* ./foo */);
+      const fn = __require(1 /* ./foo */);
       console.log(fn());
     }
     nestedScope();
@@ -235,9 +237,9 @@ func TestCommonJSFromES6(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  1(require, exports) {
+  1(exports) {
     // /foo.js
-    require(exports, {
+    __export(exports, {
       fn: () => fn
     });
     function fn() {
@@ -245,9 +247,9 @@ func TestCommonJSFromES6(t *testing.T) {
     }
   },
 
-  0(require) {
+  0() {
     // /entry.js
-    const fn = require(1 /* ./foo */);
+    const fn = __require(1 /* ./foo */);
     console.log(fn());
   }
 }, 0);
@@ -279,16 +281,16 @@ func TestES6FromCommonJS(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  1(require, exports) {
+  1(exports) {
     // /foo.js
     exports.fn = function() {
       return 123;
     };
   },
 
-  0(require) {
+  0() {
     // /entry.js
-    const foo = require(1 /* ./foo */, true /* ES6 import */);
+    const foo = __import(1 /* ./foo */);
     console.log(foo.fn());
   }
 }, 0);
@@ -325,16 +327,16 @@ func TestNestedES6FromCommonJS(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  1(require, exports) {
+  1(exports) {
     // /foo.js
     exports.fn = function() {
       return 123;
     };
   },
 
-  0(require) {
+  0() {
     // /entry.js
-    const foo = require(1 /* ./foo */, true /* ES6 import */);
+    const foo = __import(1 /* ./foo */);
     (() => {
       console.log(foo.fn());
     })();
@@ -372,19 +374,19 @@ func TestExportForms(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  2(require, exports) {
+  2(exports) {
     // /a.js
     const abc = void 0;
 
     // /b.js
     var b = {};
-    require(b, {
+    __export(b, {
       xyz: () => xyz
     });
     const xyz = null;
 
     // /entry.js
-    require(exports, {
+    __export(exports, {
       C: () => Class,
       Class: () => Class,
       Fn: () => Fn,
@@ -438,7 +440,11 @@ func TestExportFormsWithMinifyIdentifiersAndNoBundle(t *testing.T) {
 			"/d.js",
 			"/e.js",
 		},
+		parseOptions: parser.ParseOptions{
+			IsBundling: false,
+		},
 		bundleOptions: BundleOptions{
+			IsBundling:        false,
 			MinifyIdentifiers: true,
 			AbsOutputDir:      "/out",
 		},
@@ -494,7 +500,11 @@ func TestImportFormsWithNoBundle(t *testing.T) {
 			`,
 		},
 		entryPaths: []string{"/entry.js"},
+		parseOptions: parser.ParseOptions{
+			IsBundling: false,
+		},
 		bundleOptions: BundleOptions{
+			IsBundling:    false,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -533,7 +543,11 @@ func TestImportFormsWithMinifyIdentifiersAndNoBundle(t *testing.T) {
 			`,
 		},
 		entryPaths: []string{"/entry.js"},
+		parseOptions: parser.ParseOptions{
+			IsBundling: false,
+		},
 		bundleOptions: BundleOptions{
+			IsBundling:        false,
 			MinifyIdentifiers: true,
 			AbsOutputFile:     "/out.js",
 		},
@@ -596,25 +610,25 @@ func TestExportFormsCommonJS(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  0(require, exports) {
+  0(exports) {
     // /a.js
-    require(exports, {
+    __export(exports, {
       abc: () => abc
     });
     const abc = void 0;
   },
 
-  1(require, exports) {
+  1(exports) {
     // /b.js
-    require(exports, {
+    __export(exports, {
       xyz: () => xyz
     });
     const xyz = null;
   },
 
-  3(require, exports) {
+  3(exports) {
     // /commonjs.js
-    require(exports, {
+    __export(exports, {
       C: () => Class,
       Class: () => Class,
       Fn: () => Fn,
@@ -624,7 +638,7 @@ func TestExportFormsCommonJS(t *testing.T) {
       l: () => l,
       v: () => v
     });
-    const b = require(1 /* ./b */, true /* ES6 import */);
+    const b = __import(1 /* ./b */);
     const default2 = 123;
     var v = 234;
     let l = 234;
@@ -635,69 +649,69 @@ func TestExportFormsCommonJS(t *testing.T) {
     }
   },
 
-  2(require, exports) {
+  2(exports) {
     // /c.js
-    require(exports, {
+    __export(exports, {
       default: () => default2
     });
     class default2 {
     }
   },
 
-  4(require, exports) {
+  4(exports) {
     // /d.js
-    require(exports, {
+    __export(exports, {
       default: () => Foo
     });
     class Foo {
     }
   },
 
-  5(require, exports) {
+  5(exports) {
     // /e.js
-    require(exports, {
+    __export(exports, {
       default: () => default2
     });
     function default2() {
     }
   },
 
-  7(require, exports) {
+  7(exports) {
     // /f.js
-    require(exports, {
+    __export(exports, {
       default: () => foo
     });
     function foo() {
     }
   },
 
-  8(require, exports) {
+  8(exports) {
     // /g.js
-    require(exports, {
+    __export(exports, {
       default: () => default2
     });
     async function default2() {
     }
   },
 
-  9(require, exports) {
+  9(exports) {
     // /h.js
-    require(exports, {
+    __export(exports, {
       default: () => foo
     });
     async function foo() {
     }
   },
 
-  6(require) {
+  6() {
     // /entry.js
-    require(3 /* ./commonjs */);
-    require(2 /* ./c */);
-    require(4 /* ./d */);
-    require(5 /* ./e */);
-    require(7 /* ./f */);
-    require(8 /* ./g */);
-    require(9 /* ./h */);
+    __require(3 /* ./commonjs */);
+    __require(2 /* ./c */);
+    __require(4 /* ./d */);
+    __require(5 /* ./e */);
+    __require(7 /* ./f */);
+    __require(8 /* ./g */);
+    __require(9 /* ./h */);
   }
 }, 6);
 `,
@@ -723,9 +737,9 @@ func TestExportSelf(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  0(require, exports) {
+  0(exports) {
     // /entry.js
-    require(exports, {
+    __export(exports, {
       foo: () => foo
     });
     const foo = 123;
@@ -754,9 +768,9 @@ func TestExportSelfAsNamespace(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  0(require, exports) {
+  0(exports) {
     // /entry.js
-    require(exports, {
+    __export(exports, {
       foo: () => foo,
       ns: () => exports
     });
@@ -793,14 +807,14 @@ func TestJSXImportsCommonJS(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  0(require, exports, module) {
+  0(exports, module) {
     // /custom-react.js
     module.exports = {};
   },
 
-  1(require) {
+  1() {
     // /entry.jsx
-    const custom_react = require(0 /* ./custom-react */, true /* ES6 import */);
+    const custom_react = __import(0 /* ./custom-react */);
     console.log(custom_react.elem("div", null), custom_react.elem(custom_react.frag, null, "fragment"));
   }
 }, 1);
@@ -924,16 +938,16 @@ func TestNodeModules(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/Users/user/project/out.js": `bootstrap({
-  0(require, exports, module) {
+  0(exports, module) {
     // /Users/user/project/node_modules/demo-pkg/index.js
     module.exports = function() {
       return 123;
     };
   },
 
-  1(require) {
+  1() {
     // /Users/user/project/src/entry.js
-    const demo_pkg = require(0 /* demo-pkg */, true /* ES6 import */);
+    const demo_pkg = __import(0 /* demo-pkg */);
     console.log(demo_pkg.default());
   }
 }, 1);
@@ -970,16 +984,16 @@ func TestPackageJsonMain(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/Users/user/project/out.js": `bootstrap({
-  0(require, exports, module) {
+  0(exports, module) {
     // /Users/user/project/node_modules/demo-pkg/custom-main.js
     module.exports = function() {
       return 123;
     };
   },
 
-  1(require) {
+  1() {
     // /Users/user/project/src/entry.js
-    const demo_pkg = require(0 /* demo-pkg */, true /* ES6 import */);
+    const demo_pkg = __import(0 /* demo-pkg */);
     console.log(demo_pkg.default());
   }
 }, 1);
@@ -1018,16 +1032,16 @@ func TestTsconfigJsonBaseUrl(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/Users/user/project/out.js": `bootstrap({
-  1(require, exports, module) {
+  1(exports, module) {
     // /Users/user/project/src/lib/util.js
     module.exports = function() {
       return 123;
     };
   },
 
-  0(require) {
+  0() {
     // /Users/user/project/src/app/entry.js
-    const util = require(1 /* lib/util */, true /* ES6 import */);
+    const util = __import(1 /* lib/util */);
     console.log(util.default());
   }
 }, 0);
@@ -1064,16 +1078,16 @@ func TestPackageJsonBrowserString(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/Users/user/project/out.js": `bootstrap({
-  0(require, exports, module) {
+  0(exports, module) {
     // /Users/user/project/node_modules/demo-pkg/browser.js
     module.exports = function() {
       return 123;
     };
   },
 
-  1(require) {
+  1() {
     // /Users/user/project/src/entry.js
-    const demo_pkg = require(0 /* demo-pkg */, true /* ES6 import */);
+    const demo_pkg = __import(0 /* demo-pkg */);
     console.log(demo_pkg.default());
   }
 }, 1);
@@ -1127,22 +1141,22 @@ func TestPackageJsonBrowserMapRelativeToRelative(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/Users/user/project/out.js": `bootstrap({
-  0(require, exports, module) {
+  0(exports, module) {
     // /Users/user/project/node_modules/demo-pkg/lib/util-browser.js
     module.exports = "util-browser";
   },
 
-  1(require, exports, module) {
+  1(exports, module) {
     // /Users/user/project/node_modules/demo-pkg/main-browser.js
-    const util = require(0 /* ./lib/util */);
+    const util = __require(0 /* ./lib/util */);
     module.exports = function() {
       return ["main-browser", util];
     };
   },
 
-  2(require) {
+  2() {
     // /Users/user/project/src/entry.js
-    const demo_pkg = require(1 /* demo-pkg */, true /* ES6 import */);
+    const demo_pkg = __import(1 /* demo-pkg */);
     console.log(demo_pkg.default());
   }
 }, 2);
@@ -1189,22 +1203,22 @@ func TestPackageJsonBrowserMapRelativeToModule(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/Users/user/project/out.js": `bootstrap({
-  1(require, exports, module) {
+  1(exports, module) {
     // /Users/user/project/node_modules/util-browser/index.js
     module.exports = "util-browser";
   },
 
-  0(require, exports, module) {
+  0(exports, module) {
     // /Users/user/project/node_modules/demo-pkg/main.js
-    const util = require(1 /* ./util */);
+    const util = __require(1 /* ./util */);
     module.exports = function() {
       return ["main", util];
     };
   },
 
-  2(require) {
+  2() {
     // /Users/user/project/src/entry.js
-    const demo_pkg = require(0 /* demo-pkg */, true /* ES6 import */);
+    const demo_pkg = __import(0 /* demo-pkg */);
     console.log(demo_pkg.default());
   }
 }, 2);
@@ -1252,17 +1266,17 @@ func TestPackageJsonBrowserMapRelativeDisabled(t *testing.T) {
     // /Users/user/project/node_modules/demo-pkg/util-node.js
   },
 
-  0(require, exports, module) {
+  0(exports, module) {
     // /Users/user/project/node_modules/demo-pkg/main.js
-    const util = require(1 /* ./util-node */);
+    const util = __require(1 /* ./util-node */);
     module.exports = function(obj) {
       return util.inspect(obj);
     };
   },
 
-  2(require) {
+  2() {
     // /Users/user/project/src/entry.js
-    const demo_pkg = require(0 /* demo-pkg */, true /* ES6 import */);
+    const demo_pkg = __import(0 /* demo-pkg */);
     console.log(demo_pkg.default());
   }
 }, 2);
@@ -1312,24 +1326,24 @@ func TestPackageJsonBrowserMapModuleToRelative(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/Users/user/project/out.js": `bootstrap({
-  1(require, exports, module) {
+  1(exports, module) {
     // /Users/user/project/node_modules/demo-pkg/node-pkg-browser.js
     module.exports = function() {
       return 123;
     };
   },
 
-  0(require, exports, module) {
+  0(exports, module) {
     // /Users/user/project/node_modules/demo-pkg/index.js
-    const fn = require(1 /* node-pkg */);
+    const fn = __require(1 /* node-pkg */);
     module.exports = function() {
       return fn();
     };
   },
 
-  2(require) {
+  2() {
     // /Users/user/project/src/entry.js
-    const demo_pkg = require(0 /* demo-pkg */, true /* ES6 import */);
+    const demo_pkg = __import(0 /* demo-pkg */);
     console.log(demo_pkg.default());
   }
 }, 2);
@@ -1379,24 +1393,24 @@ func TestPackageJsonBrowserMapModuleToModule(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/Users/user/project/out.js": `bootstrap({
-  1(require, exports, module) {
+  1(exports, module) {
     // /Users/user/project/node_modules/node-pkg-browser/index.js
     module.exports = function() {
       return 123;
     };
   },
 
-  0(require, exports, module) {
+  0(exports, module) {
     // /Users/user/project/node_modules/demo-pkg/index.js
-    const fn = require(1 /* node-pkg */);
+    const fn = __require(1 /* node-pkg */);
     module.exports = function() {
       return fn();
     };
   },
 
-  2(require) {
+  2() {
     // /Users/user/project/src/entry.js
-    const demo_pkg = require(0 /* demo-pkg */, true /* ES6 import */);
+    const demo_pkg = __import(0 /* demo-pkg */);
     console.log(demo_pkg.default());
   }
 }, 2);
@@ -1445,17 +1459,17 @@ func TestPackageJsonBrowserMapModuleDisabled(t *testing.T) {
     // /Users/user/project/node_modules/node-pkg/index.js
   },
 
-  0(require, exports, module) {
+  0(exports, module) {
     // /Users/user/project/node_modules/demo-pkg/index.js
-    const fn = require(1 /* node-pkg */);
+    const fn = __require(1 /* node-pkg */);
     module.exports = function() {
       return fn();
     };
   },
 
-  2(require) {
+  2() {
     // /Users/user/project/src/entry.js
-    const demo_pkg = require(0 /* demo-pkg */, true /* ES6 import */);
+    const demo_pkg = __import(0 /* demo-pkg */);
     console.log(demo_pkg.default());
   }
 }, 2);
@@ -1500,19 +1514,19 @@ func TestPackageJsonBrowserMapAvoidMissing(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/Users/user/project/out.js": `bootstrap({
-  1(require, exports, module) {
+  1(exports, module) {
     // /Users/user/project/node_modules/component-indexof/index.js
     module.exports = function() {
       return 234;
     };
   },
 
-  2(require) {
+  2() {
     // /Users/user/project/node_modules/component-classes/index.js
     try {
-      var index2 = require(1 /* indexof */);
+      var index2 = __require(1 /* indexof */);
     } catch (err) {
-      var index2 = require(1 /* component-indexof */);
+      var index2 = __require(1 /* component-indexof */);
     }
 
     // /Users/user/project/src/entry.js
@@ -1543,14 +1557,14 @@ func TestRequireChildDirCommonJS(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  0(require, exports, module) {
+  0(exports, module) {
     // /Users/user/project/src/dir/index.js
     module.exports = 123;
   },
 
-  1(require) {
+  1() {
     // /Users/user/project/src/entry.js
-    console.log(require(0 /* ./dir */));
+    console.log(__require(0 /* ./dir */));
   }
 }, 1);
 `,
@@ -1612,14 +1626,14 @@ func TestRequireParentDirCommonJS(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  1(require, exports, module) {
+  1(exports, module) {
     // /Users/user/project/src/index.js
     module.exports = 123;
   },
 
-  0(require) {
+  0() {
     // /Users/user/project/src/dir/entry.js
-    console.log(require(1 /* .. */));
+    console.log(__require(1 /* .. */));
   }
 }, 0);
 `,
@@ -1719,14 +1733,14 @@ func TestPackageImportMissingCommonJS(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  1(require, exports) {
+  1(exports) {
     // /foo.js
     exports.x = 132;
   },
 
-  0(require) {
+  0() {
     // /entry.js
-    const foo = require(1 /* ./foo */, true /* ES6 import */);
+    const foo = __import(1 /* ./foo */);
     console.log(foo.default(foo.x, foo.y));
   }
 }, 0);
@@ -1756,14 +1770,14 @@ func TestDotImport(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  1(require, exports) {
+  1(exports) {
     // /index.js
     exports.x = 123;
   },
 
-  0(require) {
+  0() {
     // /entry.js
-    const _ = require(1 /* . */, true /* ES6 import */);
+    const _ = __import(1 /* . */);
     console.log(_.x);
   }
 }, 0);
@@ -1793,15 +1807,15 @@ func TestRequireWithTemplate(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  1(require, exports) {
+  1(exports) {
     // /b.js
     exports.x = 123;
   },
 
-  0(require) {
+  0() {
     // /a.js
-    console.log(require(1 /* ./b */));
-    console.log(require(1 /* ./b */));
+    console.log(__require(1 /* ./b */));
+    console.log(__require(1 /* ./b */));
   }
 }, 0);
 `,
@@ -1830,15 +1844,15 @@ func TestDynamicImportWithTemplate(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  1(require, exports) {
+  1(exports) {
     // /b.js
     exports.x = 123;
   },
 
   0() {
     // /a.js
-    Promise.resolve().then(() => require(1 /* ./b */)).then((ns) => console.log(ns));
-    Promise.resolve().then(() => require(1 /* ./b */)).then((ns) => console.log(ns));
+    Promise.resolve().then(() => __import(1 /* ./b */)).then((ns) => console.log(ns));
+    Promise.resolve().then(() => __import(1 /* ./b */)).then((ns) => console.log(ns));
   }
 }, 0);
 `,
@@ -1896,7 +1910,7 @@ func TestRequireJson(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  1(require, exports, module) {
+  1(exports, module) {
     // /test.json
     module.exports = {
       a: true,
@@ -1905,9 +1919,9 @@ func TestRequireJson(t *testing.T) {
     };
   },
 
-  0(require) {
+  0() {
     // /entry.js
-    console.log(require(1 /* ./test.json */));
+    console.log(__require(1 /* ./test.json */));
   }
 }, 0);
 `,
@@ -1933,14 +1947,14 @@ func TestRequireTxt(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  1(require, exports, module) {
+  1(exports, module) {
     // /test.txt
     module.exports = "This is a test.";
   },
 
-  0(require) {
+  0() {
     // /entry.js
-    console.log(require(1 /* ./test.txt */));
+    console.log(__require(1 /* ./test.txt */));
   }
 }, 0);
 `,
@@ -1970,14 +1984,14 @@ func TestRequireCustomExtensionString(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  1(require, exports, module) {
+  1(exports, module) {
     // /test.custom
     module.exports = "This is a test.";
   },
 
-  0(require) {
+  0() {
     // /entry.js
-    console.log(require(1 /* ./test.custom */));
+    console.log(__require(1 /* ./test.custom */));
   }
 }, 0);
 `,
@@ -2007,14 +2021,14 @@ func TestRequireCustomExtensionBase64(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  1(require, exports, module) {
+  1(exports, module) {
     // /test.custom
     module.exports = "YQBigGP/ZA==";
   },
 
-  0(require) {
+  0() {
     // /entry.js
-    console.log(require(1 /* ./test.custom */));
+    console.log(__require(1 /* ./test.custom */));
   }
 }, 0);
 `,
@@ -2063,7 +2077,7 @@ func TestFalseRequire(t *testing.T) {
 			"/out.js": `bootstrap({
   0() {
     // /entry.js
-    ((require2) => require2("/test.txt"))();
+    ((require3) => require3("/test.txt"))();
   }
 }, 0);
 `,
@@ -2138,7 +2152,7 @@ func TestRequireWithoutCallInsideTry(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  0(require) {
+  0() {
     // /entry.js
     try {
       oldLocale = globalLocale._abbr;
@@ -2280,7 +2294,11 @@ func TestHashbangNoBundle(t *testing.T) {
 			`,
 		},
 		entryPaths: []string{"/entry.js"},
+		parseOptions: parser.ParseOptions{
+			IsBundling: false,
+		},
 		bundleOptions: BundleOptions{
+			IsBundling:    false,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -2326,7 +2344,11 @@ func TestTypeofRequireNoBundle(t *testing.T) {
 			`,
 		},
 		entryPaths: []string{"/entry.js"},
+		parseOptions: parser.ParseOptions{
+			IsBundling: false,
+		},
 		bundleOptions: BundleOptions{
+			IsBundling:    false,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -2378,7 +2400,7 @@ func TestRequireFSNode(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  0(require) {
+  0() {
     // /entry.js
     console.log(require("fs"));
   }
@@ -2442,9 +2464,12 @@ func TestImportFSNode(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  0(require) {
+  0() {
     // /entry.js
-    const fs = require("fs", true /* ES6 import */), fs2 = require("fs", true /* ES6 import */), fs3 = require("fs", true /* ES6 import */), fs4 = require("fs", true /* ES6 import */);
+    const fs = require("fs");
+    const fs2 = require("fs");
+    const fs3 = require("fs");
+    const fs4 = require("fs");
     console.log(fs2, fs4.readFileSync, fs3.default);
   }
 }, 0);
@@ -2499,13 +2524,14 @@ func TestExportFSNode(t *testing.T) {
 		},
 		expected: map[string]string{
 			"/out.js": `bootstrap({
-  0(require, exports) {
+  0(exports) {
     // /entry.js
-    require(exports, {
+    __export(exports, {
       fs: () => fs,
       readFileSync: () => fs2.readFileSync
     });
-    const fs = require("fs", true /* ES6 import */), fs2 = require("fs", true /* ES6 import */);
+    const fs = require("fs");
+    const fs2 = require("fs");
   }
 }, 0);
 `,
@@ -2595,7 +2621,7 @@ func TestMinifiedBundleCommonJS(t *testing.T) {
 			AbsOutputFile:     "/out.js",
 		},
 		expected: map[string]string{
-			"/out.js": `bootstrap({0(b,a){a.foo=function(){return 123}},2(c,b,a){a.exports={test:!0}},1(a){const{foo:b}=a(0);console.log(b(),a(2))}},1);
+			"/out.js": `bootstrap({0(a){a.foo=function(){return 123}},2(b,a){a.exports={test:!0}},1(){const{foo:b}=f$(0);console.log(b(),f$(2))}},1);
 `,
 		},
 	})
@@ -2624,7 +2650,7 @@ func TestMinifiedBundleEndingWithImportantSemicolon(t *testing.T) {
 	})
 }
 
-func TestOptionalCatchNameCollision(t *testing.T) {
+func TestOptionalCatchNameCollisionNoBundle(t *testing.T) {
 	expectBundled(t, bundled{
 		files: map[string]string{
 			"/entry.js": `
@@ -2635,9 +2661,11 @@ func TestOptionalCatchNameCollision(t *testing.T) {
 		},
 		entryPaths: []string{"/entry.js"},
 		parseOptions: parser.ParseOptions{
-			Target: parser.ES2018,
+			IsBundling: false,
+			Target:     parser.ES2018,
 		},
 		bundleOptions: BundleOptions{
+			IsBundling:    false,
 			AbsOutputFile: "/out.js",
 		},
 		expected: map[string]string{
@@ -2646,6 +2674,168 @@ func TestOptionalCatchNameCollision(t *testing.T) {
   var e, e2;
 }
 var e3;
+`,
+		},
+	})
+}
+
+func TestRuntimeNameCollisionNoBundle(t *testing.T) {
+	expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				function __require() { return 123 }
+				console.log(__require())
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		parseOptions: parser.ParseOptions{
+			IsBundling: false,
+			Target:     parser.ES2018,
+		},
+		bundleOptions: BundleOptions{
+			IsBundling:    false,
+			AbsOutputFile: "/out.js",
+		},
+		expected: map[string]string{
+			"/out.js": `function __require() {
+  return 123;
+}
+console.log(__require());
+`,
+		},
+	})
+}
+
+func TestTopLevelReturn(t *testing.T) {
+	expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				import {foo} from './foo'
+				foo()
+			`,
+			"/foo.js": `
+				// Top-level return must force CommonJS mode
+				if (Math.random() < 0.5) return
+
+				export function foo() {}
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		parseOptions: parser.ParseOptions{
+			IsBundling: true,
+		},
+		bundleOptions: BundleOptions{
+			IsBundling:    true,
+			AbsOutputFile: "/out.js",
+		},
+		expected: map[string]string{
+			"/out.js": `bootstrap({
+  1(exports) {
+    // /foo.js
+    __export(exports, {
+      foo: () => foo
+    });
+    if (Math.random() < 0.5)
+      return;
+    function foo() {
+    }
+  },
+
+  0() {
+    // /entry.js
+    const foo = __import(1 /* ./foo */);
+    foo.foo();
+  }
+}, 0);
+`,
+		},
+	})
+}
+
+func TestThisOutsideFunction(t *testing.T) {
+	expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				console.log(this)
+				console.log((x = this) => this)
+				console.log({x: this})
+				console.log(class extends this.foo {})
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		parseOptions: parser.ParseOptions{
+			IsBundling: true,
+		},
+		bundleOptions: BundleOptions{
+			IsBundling:    true,
+			AbsOutputFile: "/out.js",
+		},
+		expected: map[string]string{
+			"/out.js": `bootstrap({
+  0(exports) {
+    // /entry.js
+    console.log(exports);
+    console.log((x = exports) => exports);
+    console.log({
+      x: exports
+    });
+    console.log(class extends exports.foo {
+    });
+  }
+}, 0);
+`,
+		},
+	})
+}
+
+func TestThisInsideFunction(t *testing.T) {
+	expectBundled(t, bundled{
+		files: map[string]string{
+			"/entry.js": `
+				function foo(x = this) { console.log(this) }
+				const obj = {
+					foo(x = this) { console.log(this) }
+				}
+				class Foo {
+					x = this
+					static y = this.z
+					foo(x = this) { console.log(this) }
+					static bar(x = this) { console.log(this) }
+				}
+			`,
+		},
+		entryPaths: []string{"/entry.js"},
+		parseOptions: parser.ParseOptions{
+			IsBundling: true,
+		},
+		bundleOptions: BundleOptions{
+			IsBundling:    true,
+			AbsOutputFile: "/out.js",
+		},
+		expected: map[string]string{
+			"/out.js": `bootstrap({
+  0() {
+    // /entry.js
+    function foo(x = this) {
+      console.log(this);
+    }
+    const obj = {
+      foo(x = this) {
+        console.log(this);
+      }
+    };
+    class Foo {
+      x = this;
+      static y = this.z;
+      foo(x = this) {
+        console.log(this);
+      }
+      static bar(x = this) {
+        console.log(this);
+      }
+    }
+  }
+}, 0);
 `,
 		},
 	})
