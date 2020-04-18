@@ -394,10 +394,9 @@ type printer struct {
 	prevRegExpEnd      int
 
 	// For imports
-	resolvedImports     map[string]uint32
-	indirectImportItems map[ast.Ref]bool
-	requireRef          ast.Ref // For CommonJS imports
-	importRef           ast.Ref // For ES6 imports
+	resolvedImports map[string]uint32
+	requireRef      ast.Ref // For CommonJS imports
+	importRef       ast.Ref // For ES6 imports
 
 	// For source maps
 	writeSourceMap bool
@@ -801,9 +800,11 @@ func (p *printer) printProperty(item ast.Property) {
 						return
 					}
 
-				case *ast.ENamespaceImport:
+				case *ast.EImportIdentifier:
 					// Make sure we're not using a property access instead of an identifier
-					if !p.indirectImportItems[e.ItemRef] && text == p.symbolName(e.ItemRef) {
+					ref := ast.FollowSymbols(p.symbols, e.Ref)
+					symbol := p.symbols.Get(ref)
+					if symbol.NamespaceAlias == nil && text == symbol.Name {
 						if item.Initializer != nil {
 							p.printSpace()
 							p.print("=")
@@ -1320,14 +1321,17 @@ func (p *printer) printExpr(expr ast.Expr, level ast.L, flags int) {
 		p.printSpaceBeforeIdentifier()
 		p.printSymbol(e.Ref)
 
-	case *ast.ENamespaceImport:
+	case *ast.EImportIdentifier:
 		// Potentially use a property access instead of an identifier
-		if p.indirectImportItems[e.ItemRef] {
-			p.printSymbol(e.NamespaceRef)
+		ref := ast.FollowSymbols(p.symbols, e.Ref)
+		symbol := p.symbols.Get(ref)
+		if symbol.NamespaceAlias != nil {
+			p.printSymbol(symbol.NamespaceAlias.NamespaceRef)
 			p.print(".")
-			p.print(e.Alias)
+			p.print(symbol.NamespaceAlias.Alias)
 		} else {
-			p.printSymbol(e.ItemRef)
+			p.printSpaceBeforeIdentifier()
+			p.print(symbol.Name)
 		}
 
 	case *ast.EAwait:
@@ -2156,25 +2160,23 @@ type SourceMapChunk struct {
 
 func createPrinter(
 	symbols *ast.SymbolMap,
-	indirectImportItems map[ast.Ref]bool,
 	options PrintOptions,
 ) *printer {
 	p := &printer{
-		symbols:             symbols,
-		indirectImportItems: indirectImportItems,
-		writeSourceMap:      options.SourceMapContents != nil,
-		minify:              options.RemoveWhitespace,
-		resolvedImports:     options.ResolvedImports,
-		indent:              options.Indent,
-		stmtStart:           -1,
-		exportDefaultStart:  -1,
-		arrowExprStart:      -1,
-		prevOpEnd:           -1,
-		prevNumEnd:          -1,
-		prevRegExpEnd:       -1,
-		prevLoc:             ast.Loc{-1},
-		requireRef:          options.RequireRef,
-		importRef:           options.ImportRef,
+		symbols:            symbols,
+		writeSourceMap:     options.SourceMapContents != nil,
+		minify:             options.RemoveWhitespace,
+		resolvedImports:    options.ResolvedImports,
+		indent:             options.Indent,
+		stmtStart:          -1,
+		exportDefaultStart: -1,
+		arrowExprStart:     -1,
+		prevOpEnd:          -1,
+		prevNumEnd:         -1,
+		prevRegExpEnd:      -1,
+		prevLoc:            ast.Loc{-1},
+		requireRef:         options.RequireRef,
+		importRef:          options.ImportRef,
 	}
 
 	// If we're writing out a source map, prepare a table of line start indices
@@ -2218,7 +2220,7 @@ type PrintResult struct {
 }
 
 func Print(tree ast.AST, options PrintOptions) PrintResult {
-	p := createPrinter(tree.Symbols, tree.IndirectImportItems, options)
+	p := createPrinter(tree.Symbols, options)
 
 	// Always add a mapping at the beginning of the file
 	p.addSourceMapping(ast.Loc{0})
@@ -2248,7 +2250,7 @@ func Print(tree ast.AST, options PrintOptions) PrintResult {
 }
 
 func PrintExpr(expr ast.Expr, symbols *ast.SymbolMap, options PrintOptions) PrintResult {
-	p := createPrinter(symbols, make(map[ast.Ref]bool), options)
+	p := createPrinter(symbols, options)
 
 	// Always add a mapping at the beginning of the file
 	p.addSourceMapping(ast.Loc{0})
