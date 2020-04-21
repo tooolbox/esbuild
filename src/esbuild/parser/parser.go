@@ -87,7 +87,6 @@ type parser struct {
 	callTarget        ast.E
 	typeofTarget      ast.E
 	moduleScope       *ast.Scope
-	unbound           []ast.Ref
 	isControlFlowDead bool
 	tempRefs          []ast.Ref // Temporary variables used for lowering
 	identifierDefines map[string]ast.E
@@ -2536,10 +2535,13 @@ func (p *parser) parseSuffix(left ast.Expr, level ast.L, errors *deferredErrors)
 
 		case lexer.TExclamation:
 			// Skip over TypeScript non-null assertions
+			if p.lexer.HasNewlineBefore {
+				return left
+			}
 			if !p.ts.Parse {
 				p.lexer.Unexpected()
 			}
-			if p.lexer.HasNewlineBefore || level >= ast.LPostfix {
+			if level >= ast.LPostfix {
 				return left
 			}
 			p.lexer.Next()
@@ -4860,7 +4862,6 @@ func (p *parser) findSymbol(name string) ast.Ref {
 			// Allocate an "unbound" symbol
 			ref = p.newSymbol(ast.SymbolUnbound, name)
 			p.moduleScope.Members[name] = ref
-			p.unbound = append(p.unbound, ref)
 
 			// Track how many times we've referenced this symbol
 			p.recordUsage(ref)
@@ -4883,7 +4884,6 @@ func (p *parser) findLabelSymbol(loc ast.Loc, name string) ast.Ref {
 
 	// Allocate an "unbound" symbol
 	ref := p.newSymbol(ast.SymbolUnbound, name)
-	p.unbound = append(p.unbound, ref)
 
 	// Track how many times we've referenced this symbol
 	p.recordUsage(ref)
@@ -5701,7 +5701,6 @@ func (p *parser) visitAndAppendStmt(stmts []ast.Stmt, stmt ast.Stmt) []ast.Stmt 
 		for i, item := range s.Items {
 			name := p.loadNameFromRef(item.Name.Ref)
 			s.Items[i].Name.Ref = p.newSymbol(ast.SymbolUnbound, name)
-			p.unbound = append(p.unbound, item.Name.Ref)
 			p.recordExport(item.AliasLoc, item.Alias)
 		}
 
@@ -7886,7 +7885,6 @@ func (p *parser) toAST(source logging.Source, stmts []ast.Stmt, hashbang string)
 		ModuleScope:          p.moduleScope,
 		Symbols:              &symbols,
 		ExportsRef:           p.exportsRef,
-		RequireRef:           p.requireRef,
 		ModuleRef:            p.moduleRef,
 		Hashbang:             hashbang,
 	}
